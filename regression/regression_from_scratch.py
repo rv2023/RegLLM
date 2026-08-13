@@ -1,8 +1,7 @@
-from regression_inputs import inputs, m, c, h, tolerance
-
+from regression_inputs import inputs, m, c, h, tolerance, learning_rate
 actual_outputs = [10, 13, 16, 19, 22]
 
-def linear_regression(inputs, m, c):
+def predict(inputs, m, c):
     model_outputs = []
     for j in inputs:
         y = m * j + c
@@ -64,7 +63,7 @@ def update_parameters(m, c, gm, gc, learning_rate):
 
 def numerical_gradients(actual_outputs, inputs, m, c, h):
     def loss(mm, cc):
-        return MSE(actual_outputs, linear_regression(inputs, mm, cc))
+        return MSE(actual_outputs, predict(inputs, mm, cc))
 
     dm = (loss(m + h, c) - loss(m - h, c)) / (2 * h)
     dc = (loss(m, c + h) - loss(m, c - h)) / (2 * h)
@@ -72,30 +71,26 @@ def numerical_gradients(actual_outputs, inputs, m, c, h):
 
 
 def check_gradients(actual_outputs, inputs, m, c, tolerance):
-    gm, gc = gradients(actual_outputs, linear_regression(inputs, m, c), inputs)
+    gm, gc = gradients(actual_outputs, predict(inputs, m, c), inputs)
     nm, nc = numerical_gradients(actual_outputs, inputs, m, c, h)
 
     print(f"m={m}, c={c}, h={h}")
     print(f"  dL/dm  analytical={gm:9.4f}  numerical={nm:9.4f}  ok={abs(gm - nm) < tolerance}")
     print(f"  dL/dc  analytical={gc:9.4f}  numerical={nc:9.4f}  ok={abs(gc - nc) < tolerance}")
 
-print("Gradiant validation")
-check_gradients(actual_outputs, inputs, 0, 0, tolerance)
-check_gradients(actual_outputs, inputs, 2, 5, tolerance)
+if __name__ == "__main__":
+    print("Gradiant validation")
+    check_gradients(actual_outputs, inputs, 0, 0, tolerance)
+    check_gradients(actual_outputs, inputs, 2, 5, tolerance)
 
+    print("Gradiant run")
+    gm, gc = gradients(actual_outputs, predict(inputs, m, c), inputs)
+    nm, nc = numerical_gradients(actual_outputs, inputs, m, c, h)
+    print(f"m={m}, c={c}, h={h}")
+    print(f"  dL/dm  analytical={gm:9.4f}  numerical={nm:9.4f}  ok={abs(gm - nm) < tolerance}")
+    print(f"  dL/dc  analytical={gc:9.4f}  numerical={nc:9.4f}  ok={abs(gc - nc) < tolerance}")
 
-#print("dL/dy`", dL_dy(actual_outputs, linear_regression(inputs, m, c)))
-#print("dL/dm,", "dL/dc", gradients(actual_outputs, linear_regression(inputs, m, c), inputs))
-#gm, gc = gradients(actual_outputs, linear_regression(inputs, m, c), inputs)
-#print("Updated parameters", update_parameters(m, c, gm, gc, 0.01))
-
-print("Gradiant run")
-gm, gc = gradients(actual_outputs, linear_regression(inputs, m, c), inputs)
-nm, nc = numerical_gradients(actual_outputs, inputs, m, c, h)
-print(f"m={m}, c={c}, h={h}")
-print(f"  dL/dm  analytical={gm:9.4f}  numerical={nm:9.4f}  ok={abs(gm - nm) < tolerance}")
-print(f"  dL/dc  analytical={gc:9.4f}  numerical={nc:9.4f}  ok={abs(gc - nc) < tolerance}")
-
-print("dL/dy`", dL_dy(actual_outputs, linear_regression(inputs, m, c)))
-print("dL/dm,", "dL/dc", gradients(actual_outputs, linear_regression(inputs, m, c), inputs))
-print("Updated parameters", update_parameters(m, c, gm, gc, 0.01))
+    print("dL/dy`", dL_dy(actual_outputs, predict(inputs, m, c)))
+    print("dL/dm,", "dL/dc", gradients(actual_outputs, predict(inputs, m, c), inputs))
+    updated_m, updated_c = update_parameters(m, c, gm, gc, learning_rate)
+    print("Updated parameters", updated_m, updated_c)

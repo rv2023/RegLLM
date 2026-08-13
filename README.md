@@ -23,6 +23,7 @@ for a concept that has not yet been implemented by hand.
 | [TASKS.md](TASKS.md) | Current milestone detail: topics, tasks, validation, checkboxes |
 | [CLAUDE.md](CLAUDE.md) | Rules for any AI agent working in this repo |
 | [Codex.md](Codex.md) | The original project prompt, kept for context |
+| [docs/qa-notes.md](docs/qa-notes.md) | Questions answered during the build, bugs hit, and verified reference numbers |
 
 Where they disagree, that order is the order of authority.
 
