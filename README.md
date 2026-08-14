@@ -43,11 +43,29 @@ Where they disagree, that order is the order of authority.
 
 ## Current status
 
-Planning complete. **Next up: Regression milestone R1** — represent `x` and `y`
-data and compute predictions from supplied values of `m` and `c`, using
-`y_hat = mx + c`. See [TASKS.md](TASKS.md#r1--data-and-forward-prediction).
+**R1–R6 complete. Next up: R7 — L1 and L2 regularization.**
 
-No implementation code has been written yet.
+| Milestone | Result |
+| --- | --- |
+| R1 Data and forward prediction | `y_hat = mx + c` over parallel collections |
+| R2 Prediction error and MSE | MSE by hand, with a length guard |
+| R3 Analytical gradients | `dL/dm`, `dL/dc` derived and verified by finite differences |
+| R4 Gradient descent | training loop; four learning rates, one divergent |
+| R5 Visualization | fitted line, loss curves, learning-rate comparison |
+| R6 Noisy data | NumPy rewrite, seeded noise, 80/20 split, train vs test MSE |
+
+Recovering the true parameters from 50 noisy points, `lr=0.01`, 20,000 iterations:
+
+```
+learned     m=3.0707  c=6.2686      (true 3.0, 7.0)
+train MSE   2.4766
+test  MSE   1.6489
+noise floor 4.0000   (sigma^2)
+```
+
+Files: `regression_from_scratch.py` (list-based functions), `regression_loop.py`
+(training loop), `regression_plot.py` (R5 charts), `training.py` (NumPy functions
+and seeded noisy data), `train_r6.py` (R6 training run and charts).
 
 ## Environment
 

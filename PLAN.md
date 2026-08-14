@@ -47,7 +47,9 @@ A milestone is complete when:
 - The learner can explain the relevant shapes or mathematical operations.
 - Important review findings have been corrected.
 
-## Current starting point
+## Current position
 
-Begin with Regression Milestone R1 in `TASKS.md`: represent `x` and `y` data and manually compute predictions using supplied values of `m` and `c`.
+R1–R6 are complete: forward prediction, mean squared error, hand-derived gradients checked numerically, a training loop compared across four learning rates, plots of the fit and the loss curves, and a NumPy rewrite trained on seeded noisy data with a train/test split.
+
+Next is Regression Milestone R7 in `TASKS.md`: implement L1 and L2 regularization by hand and compare their effect on the loss, the gradients, and the learned parameters.
 

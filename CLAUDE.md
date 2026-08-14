@@ -45,8 +45,11 @@ If these ever disagree, the higher-numbered file loses.
    Tiny LLM: no Hugging Face `AutoModelForCausalLM`, `GPT2Model`, pretrained
    weights, or high-level `Trainer` APIs at any point in L1–L12. PyTorch is
    allowed from L3 for tensors and autograd; the architecture is built by hand.
-8. **Do not mark tasks complete in `TASKS.md` on the owner's behalf.** The owner
-   ticks the boxes.
+8. **Tick `TASKS.md` boxes only when a milestone has been signed off**, and say
+   so when you do. The owner can veto any tick. Never mark work complete that
+   has not actually run and been reviewed. Keep the status lines in `README.md`
+   and `PLAN.md` pointing at the current milestone, and append to
+   `docs/qa-notes.md` as questions get answered.
 
 ## Task format
 

@@ -17,16 +17,16 @@ Work on only the current milestone. Later tasks may be refined when earlier impl
 
 ### Tasks
 
-- [ ] Create `regression/regression_from_scratch.py`.
-- [ ] Represent advertising-spend inputs as `1, 2, 3, 4, 5`.
-- [ ] Represent actual sales as `10, 13, 16, 19, 22`.
-- [ ] Store the supplied parameters `m = 3` and `c = 7`.
-- [ ] Create an empty collection for predictions.
-- [ ] Calculate one prediction per input using `y_hat = mx + c`.
-- [ ] Store all predictions without hard-coding their values.
-- [ ] Print each input with its actual and predicted sales.
-- [ ] Print the complete prediction collection.
-- [ ] Confirm that the input, target, and prediction collections have equal lengths.
+- [x] Create `regression/regression_from_scratch.py`.
+- [x] Represent advertising-spend inputs as `1, 2, 3, 4, 5`.
+- [x] Represent actual sales as `10, 13, 16, 19, 22`.
+- [x] Store the supplied parameters `m = 3` and `c = 7`.
+- [x] Create an empty collection for predictions.
+- [x] Calculate one prediction per input using `y_hat = mx + c`.
+- [x] Store all predictions without hard-coding their values.
+- [x] Print each input with its actual and predicted sales.
+- [x] Print the complete prediction collection.
+- [x] Confirm that the input, target, and prediction collections have equal lengths.
 
 ### Expected behavior
 
@@ -56,11 +56,11 @@ Submit the code and terminal output for review before beginning R2. Be prepared 
 
 ### Tasks
 
-- [ ] Refactor forward prediction into a reusable function.
-- [ ] Calculate each residual as predicted minus actual.
-- [ ] Square each residual.
-- [ ] Implement mean squared error manually.
-- [ ] Reject or clearly handle collections with different lengths.
+- [x] Refactor forward prediction into a reusable function.
+- [x] Calculate each residual as predicted minus actual.
+- [x] Square each residual.
+- [x] Implement mean squared error manually.
+- [x] Reject or clearly handle collections with different lengths.
 
 ### Validation
 
@@ -80,10 +80,10 @@ Submit the code and terminal output for review before beginning R2. Be prepared 
 
 ### Tasks
 
-- [ ] Write the MSE gradient equations for `m` and `c` in comments or project notes.
-- [ ] Implement `dL/dm` and `dL/dc` manually.
-- [ ] Calculate both gradients for the current parameters.
-- [ ] Check analytical gradients using small numerical parameter changes.
+- [x] Write the MSE gradient equations for `m` and `c` in comments or project notes.
+- [x] Implement `dL/dm` and `dL/dc` manually.
+- [x] Calculate both gradients for the current parameters.
+- [x] Check analytical gradients using small numerical parameter changes.
 
 ### Validation
 
@@ -102,11 +102,11 @@ Submit the code and terminal output for review before beginning R2. Be prepared 
 
 ### Tasks
 
-- [ ] Apply one update to `m` and `c`.
-- [ ] Print parameters and loss before and after the update.
-- [ ] Build a training loop.
-- [ ] Record loss and parameter history.
-- [ ] Experiment with at least three learning rates.
+- [x] Apply one update to `m` and `c`.
+- [x] Print parameters and loss before and after the update.
+- [x] Build a training loop.
+- [x] Record loss and parameter history.
+- [x] Experiment with at least three learning rates.
 
 ### Validation
 
@@ -129,10 +129,10 @@ Submit the code and terminal output for review before beginning R2. Be prepared 
 
 ### Tasks
 
-- [ ] Convert the working implementation to NumPy after confirming the list-based math.
-- [ ] Generate reproducible noisy data following approximately `sales = 3x + 7 + noise`.
-- [ ] Plot data, fitted line, and loss history.
-- [ ] Add a train/test split and report test MSE.
+- [x] Convert the working implementation to NumPy after confirming the list-based math.
+- [x] Generate reproducible noisy data following approximately `sales = 3x + 7 + noise`.
+- [x] Plot data, fitted line, and loss history.
+- [x] Add a train/test split and report test MSE.
 - [ ] Implement and compare L1 and L2 regularization.
 - [ ] Implement full-batch, stochastic, and mini-batch gradient descent.
 - [ ] Implement Momentum, RMSprop, and Adam one at a time.
