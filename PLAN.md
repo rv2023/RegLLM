@@ -49,7 +49,7 @@ A milestone is complete when:
 
 ## Current position
 
-R1–R6 are complete: forward prediction, mean squared error, hand-derived gradients checked numerically, a training loop compared across four learning rates, plots of the fit and the loss curves, and a NumPy rewrite trained on seeded noisy data with a train/test split.
+R1–R7 are complete: forward prediction, mean squared error, hand-derived gradients checked numerically, a training loop compared across four learning rates, plots of the fit and the loss curves, a NumPy rewrite trained on seeded noisy data with a train/test split, and L1/L2 regularization swept across penalty strengths.
 
-Next is Regression Milestone R7 in `TASKS.md`: implement L1 and L2 regularization by hand and compare their effect on the loss, the gradients, and the learned parameters.
+Next is Regression Milestone R8 in `TASKS.md`: implement stochastic and mini-batch gradient descent and compare them with the full-batch training used so far.
 

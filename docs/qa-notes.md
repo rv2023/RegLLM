@@ -7,7 +7,7 @@ at [MILESTONES.md](../MILESTONES.md).
 Every number here was produced by running the project's own code — none are
 illustrative.
 
-Covers R1–R6.
+Covers R1–R7 complete, plus the R8 concepts worked through so far.
 
 ---
 
@@ -388,7 +388,119 @@ relationship never changes; the estimate of it does.
 
 ---
 
-## Part 5 — Modules, imports, and `__main__`
+## Part 5 — Regularization (L1 and L2)
+
+### What the penalties are
+
+A second term added to the loss, so training minimises a **compromise** between
+fitting the data and keeping parameters small:
+
+$$L_{2}: \quad L + \lambda m^2 \qquad\qquad L_{1}: \quad L + \lambda |m|$$
+
+This is the first time the loss contains something that is not about accuracy.
+
+### The derivative is where they differ
+
+| | penalty | gradient contribution | behaviour |
+| --- | --- | --- | --- |
+| **L2** (ridge, weight decay) | `λm²` | `2λm` — proportional to `m` | shrinks large values hard, small ones barely; never quite reaches zero |
+| **L1** (lasso) | `λ\|m\|` | `λ·sign(m)` — **constant** | pushes just as hard at `m=0.001` as at `m=1000`; drives small values exactly to zero |
+
+L1's gradient does not exist at `m = 0` (the absolute value has a corner).
+`np.sign(0)` returns `0`, which is a valid subgradient choice — and since
+training starts at `m = 0.0`, the very first L1 step carries no penalty at all.
+
+### Why the intercept is never penalized
+
+`c` is not a measure of complexity — it is where the data happens to sit. Add
+1,000 to every `y` and the correct `c` becomes 1,007 while the relationship is
+unchanged; penalising it would fight an arbitrary property of the units.
+
+Watch `c` climb as `λ` grows: `6.27 → 8.23 → 15.56`. It is compensating for the
+shrinking slope, the line pivoting to keep passing through the middle of the
+data — the same `m`/`c` correlation seen in R6, now driven deliberately. Penalise
+`c` too and it cannot compensate, so the fit collapses much faster.
+
+Every real implementation excludes the bias for this reason. At L9, weight decay
+is applied to weight matrices but conventionally **not** to biases or LayerNorm
+parameters.
+
+### What regularization does to the numbers
+
+`lr=0.01`, 20,000 iterations, penalty on `m` only:
+
+```
+penalty   lambda           m         c    train MSE  test MSE
+none         0.0      3.0707    6.2686       2.4766    1.6489
+l2           0.1      3.0280    6.4894       2.4895    1.5159
+l2           1.0      2.6914    8.2303       3.4975    1.7920
+l2          10.0      1.2745   15.5581      25.3693   28.7412
+l1           0.1      3.0637    6.3051       2.4769    1.6243
+l1           1.0      3.0002    6.6331       2.5118    1.4496
+l1          10.0      2.3660    9.9130       6.0000    4.2944
+```
+
+- **Train MSE always worsens** as `λ` grows. It must — the objective is no longer
+  train MSE, and the unregularised fit was already optimal on that metric. A
+  regularised model beating the unregularised one on *training* error means a
+  bug.
+- **Test MSE can improve** at small `λ` — the bias/variance trade, accepting a
+  little bias to reduce sensitivity to this sample's noise. (With 10 test points
+  these differences are within sampling noise; the direction is right, the
+  magnitude is not evidence.)
+- **Large `λ` underfits.** At `λ=10` L2 gives `m=1.27` against a true `3`.
+- Both curves pass *through* the true `m = 3.0` on their way down.
+
+### Which shrinks harder?
+
+At `λ=10`, L2 reaches `m=1.27` and L1 only `2.37` — **L2 shrinks harder here**,
+which contradicts the common half-memory that "L1 is the aggressive one".
+
+Both claims are regime-dependent:
+
+- **At large `m`:** L2's push is `2λm` while L1's is `λ`. At `m ≈ 3` that is six
+  times stronger. L2 wins.
+- **Near `m = 0`:** L2's push fades to nothing, L1's stays at full strength `λ`.
+  L1 wins, and that is what drives parameters *exactly* to zero.
+
+L1's sparsity reputation comes entirely from the second regime.
+
+### When to use which
+
+- **L2 by default**, especially for neural networks. Differentiable everywhere,
+  well-behaved with correlated features (it shares weight among them), and it is
+  what "weight decay" means in AdamW at L9.
+- **L1 when sparsity is the goal** — many candidate features, most expected to be
+  irrelevant, and a model that names the few that matter is worth more than a
+  slightly more accurate dense one. A model with 12 non-zero coefficients out of
+  800 is something a human can read; a dense one with 800 small weights is not.
+  This is feature selection as a side effect of training.
+- **Neither, when the model already has the right capacity.** With two parameters
+  on genuinely linear data there is almost nothing to over-fit, which is why the
+  gains above are marginal at best.
+
+**The decision rule is not really "which penalty".** It is *"is there anything
+here to over-fit?"* Regularization pays when capacity exceeds what the truth
+requires. Choosing between L1 and L2 only matters once the answer to the first
+question is yes.
+
+L1's weakness with correlated features: given two near-identical inputs it picks
+one arbitrarily and zeros the other, so small data changes can flip which
+survives. L2 keeps both at half weight, which is more stable. **Elastic net**
+uses both penalties at once for exactly this reason.
+
+In deep learning L1 is rare on network weights; sparsity there is normally
+pursued afterwards through pruning or quantisation instead.
+
+### Evaluate without the penalty
+
+Train with the regularised objective, but **report plain `mse`**. The penalty is
+a training device, not a measure of prediction quality — scoring a model partly
+on its own penalty says nothing about how well it predicts.
+
+---
+
+## Part 7 — Modules, imports, and `__main__`
 
 ### Importing a module runs it
 
@@ -452,7 +564,7 @@ below it belongs in a different file.
 
 ---
 
-## Part 6 — Bugs hit, and what caused them
+## Part 8 — Bugs hit, and what caused them
 
 ### The sign inversion
 
@@ -607,7 +719,7 @@ Real noise is symmetric and zero-mean: `rng.normal(0, sigma, n)`.
 
 ---
 
-## Part 7 — Process questions
+## Part 9 — Process questions
 
 ### Where were those five training steps running?
 
@@ -725,7 +837,7 @@ once.
 
 ---
 
-## Part 8 — Reference numbers
+## Part 10 — Reference numbers
 
 ### Clean five-point dataset
 
