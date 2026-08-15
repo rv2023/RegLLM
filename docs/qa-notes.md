@@ -7,7 +7,7 @@ at [MILESTONES.md](../MILESTONES.md).
 Every number here was produced by running the project's own code — none are
 illustrative.
 
-Covers R1–R8 complete, plus the R9 optimizer concepts worked through so far.
+Covers R1–R9 complete, plus R10.
 
 ---
 
@@ -1230,7 +1230,205 @@ for Adam's first moment (the original paper uses `m` and `v`). Use `v_m, v_c` an
 
 ---
 
-## Part 8 — Modules, imports, and `__main__`
+## Part 8 — scikit-learn, and why gradient descent exists
+
+*R10. Numbers from `train_r10.py` on the R6 training set.*
+
+### scikit-learn does not do gradient descent
+
+`LinearRegression` has no learning rate, no iteration count, and no convergence
+question. It solves the **normal equation** directly — one shot.
+
+Setting the derivative of the squared loss to zero gives a system of linear
+equations in the parameters, which can be solved exactly. In matrix form, with
+`X` holding a column of inputs and a column of ones:
+
+```
+X_design = np.column_stack([x, np.ones_like(x)])
+beta, *_ = np.linalg.lstsq(X_design, y, rcond=None)
+m, c = beta
+```
+
+That is the whole of "training" for linear least squares. sklearn wraps the same
+computation (via SVD, which is more numerically stable than forming `X.T @ X`).
+
+### Everything agrees
+
+```
+method                                m                c
+ours (gradient desc)       3.0707169914     6.2686495707
+normal equation            3.0707169914     6.2686495707
+scikit-learn               3.0707169914     6.2686495707
+true (generating)          3.0000000000     7.0000000000
+
+sklearn vs normal equation   dm=0.00e+00  dc=7.99e-15
+ours    vs normal equation   dm=1.60e-14  dc=1.13e-13
+
+ours     train MSE=2.4765661496   test MSE=1.6488948902
+sklearn  train MSE=2.4765661496   test MSE=1.6488948902
+
+max |ours - sklearn| over the test set = 9.77e-14
+```
+
+Note none of them recover `3.0` and `7.0`. The exact minimiser of squared error
+on *this noisy sample* is `3.0707 / 6.2686`, and gradient descent found it. The
+gap to the true values is sampling error (Part 4), not an optimisation failure.
+
+### The one real difference: exact vs asymptotic
+
+sklearn's answer is exact in one solve. Gradient descent **approaches** the
+minimum and stops where you stop it:
+
+```
+  iterations    |m - exact|    |c - exact|
+          20       8.02e-01       5.22e+00
+         200       3.83e-01       2.49e+00
+        2000       2.37e-04       1.54e-03
+       20000       1.60e-14       1.13e-13
+```
+
+By 20,000 iterations the gap has closed to floating-point noise, which is why the
+two agree to 14 digits above. sklearn needs no such table — there is no iteration
+count to choose.
+
+### Which is more accurate, ours or sklearn?
+
+sklearn — by an amount that does not matter. The question conflates two errors:
+
+```
+optimization error  |ours - sklearn|     m: 1.60e-14   c: 1.05e-13
+estimation  error  |learned - true|      m: 7.07e-02   c: 7.31e-01
+
+ratio between them:  4.4e+12x
+```
+
+- **Optimization error** — how close you got to the lowest point of the loss.
+  sklearn is exact; ours stops after 20,000 iterations at `1.6e-14`. sklearn wins.
+- **Estimation error** — how close the learned parameters are to the truth. Both
+  are **identically wrong**: `m = 3.0707` against a true `3.0`.
+
+The gap between the two methods is **4.4 trillion times smaller** than the gap
+both share to reality. Train MSE agrees to twelve decimals
+(`2.476566149605` for both).
+
+**The noise in 40 data points dominates by twelve orders of magnitude.** Choosing
+between the methods changes nothing about the model's quality.
+
+This is worth carrying forward, because the instinct to chase optimization
+precision is strong and usually misplaced. A better optimizer, more iterations, a
+tighter convergence tolerance — all of it moves the number that is already
+negligible, while the number that dominates is set by how much data you have and
+how noisy it is. At L11 the same distinction appears as the gap between training
+loss and what the model actually knows.
+
+### What each API call replaced
+
+| sklearn | what it replaced |
+| --- | --- |
+| `LinearRegression()` | `m`, `c` and their initialisation |
+| `.fit(X, y)` | the whole training loop: gradients, optimizer, learning rate, iteration count, convergence |
+| `.coef_`, `.intercept_` | `m`, `c` |
+| `.predict(X)` | `predict()` |
+| `.score(X, y)` | R-squared, which we never wrote |
+
+Two API conventions worth knowing:
+
+- `X` must be **2D**, shape `(n_samples, n_features)` — so `x.reshape(-1, 1)`,
+  a column, not a flat `(40,)` array.
+- A **trailing underscore** (`coef_`, `intercept_`) marks an attribute *learned
+  from data*, as opposed to a hyperparameter you set. It only exists after
+  `.fit()`.
+
+`.score()` returns R-squared, `1 - (residual sum of squares / total sum of
+squares)` — the fraction of the target's variance the model explains. Measured
+here: `0.9643` on train, `0.9795` on test.
+
+### The regularized pair: Ridge and Lasso
+
+`LinearRegression` has no penalty, so the unregularized comparison had to drop
+R7's L1/L2 — comparing a penalised model against an unpenalised one would be
+comparing two different problems. The matching estimators are:
+
+| ours | sklearn |
+| --- | --- |
+| L2 penalty, `lam` | `Ridge(alpha=...)` |
+| L1 penalty, `lam` | `Lasso(alpha=...)` |
+
+**`alpha` is not `lam`.** Our loss uses `np.mean`; sklearn's use sums — and the
+two estimators do not even agree with each other about the scaling:
+
+```
+ours   L2:  mean((y-yhat)^2) + lam*m^2
+Ridge:      ||y - Xw||^2         + alpha*||w||^2      ->  alpha = n * lam
+
+ours   L1:  mean((y-yhat)^2) + lam*|m|
+Lasso:      (1/(2n))*||y-Xw||^2  + alpha*|w|          ->  alpha = lam / 2
+```
+
+Ridge scales by `n`; Lasso scales by `1/2`. Verified, `n = 40`:
+
+```
+  penalty    lam  sklearn alpha         ours m      their m         ours c      their c
+  L2         0.1           4.00     3.02804095   3.02804095     6.48935442   6.48935442
+  L2         1.0          40.00     2.69140131   2.69140131     8.23033146   8.23033146
+  L1         0.1           0.05     3.06367019   3.06367019     6.30509307   6.30509307
+  L1         1.0           0.50     3.00024893   3.00024893     6.63308461   6.63308461
+```
+
+Exact agreement to eight decimals once the scaling is right.
+
+**The lesson is not the constants, it is that they exist.** Two estimators in the
+same library, both called "regularization strength", with different conventions.
+Read what a library is actually minimising rather than assuming a shared
+definition — and when a penalty seems to have the wrong strength, suspect the
+scaling before suspecting the implementation.
+
+Note also `fit_intercept=True` keeps the intercept **out** of the penalty in both,
+matching the "never penalise `c`" rule from Part 5. Penalised problems converge
+more slowly under gradient descent, so reproducing these needs ~200,000
+iterations rather than 20,000.
+
+### Timing, and why it is not the point
+
+```
+ours    20000 iterations     249.43 ms
+sklearn one .fit() call        6.60 ms
+ratio                              38x
+```
+
+sklearn is not doing the same work faster. It is doing **different work**.
+
+### Why build gradient descent when a closed form exists?
+
+The lesson of R10, and the bridge to Phase 2.
+
+**The closed form exists only for linear least squares.** It requires the loss to
+be quadratic in the parameters and the model to be linear in them. Under those
+two conditions, setting the derivative to zero yields linear equations that can
+be solved directly.
+
+Break either condition and it vanishes:
+
+- **Cross-entropy (L8) is not quadratic.** Setting its derivative to zero gives
+  equations with no closed-form solution.
+- **A transformer is not linear in its parameters.** Attention multiplies learned
+  matrices together; MLPs apply nonlinearities.
+
+There is no formula for the weights of a language model and there never will be.
+Gradient descent is the only tool that works — which is why every idea from
+R3–R9 carries into Phase 2 while R10's does not.
+
+There is also a scaling argument. The normal equation inverts a `p × p` matrix,
+roughly `O(p³)`. Trivial at `p = 2`. At a hundred million parameters it is not
+slow, it is inconceivable — the matrix alone would not fit in memory.
+
+**So R10 is the exception, not the template.** It is the one problem in this
+project where the library can skip everything you built, precisely because linear
+regression is the easiest case there is.
+
+---
+
+## Part 9 — Modules, imports, and `__main__`
 
 ### Importing a module runs it
 
@@ -1294,7 +1492,7 @@ below it belongs in a different file.
 
 ---
 
-## Part 9 — Bugs hit, and what caused them
+## Part 10 — Bugs hit, and what caused them
 
 ### The sign inversion
 
@@ -1449,7 +1647,7 @@ Real noise is symmetric and zero-mean: `rng.normal(0, sigma, n)`.
 
 ---
 
-## Part 10 — Process questions
+## Part 11 — Process questions
 
 ### Where were those five training steps running?
 
@@ -1567,7 +1765,7 @@ once.
 
 ---
 
-## Part 11 — Reference numbers
+## Part 12 — Reference numbers
 
 ### Clean five-point dataset
 

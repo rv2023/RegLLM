@@ -36,6 +36,24 @@ Start with text and tokenization, then build embeddings, attention, transformer 
 
 After the tiny model works, study precision, memory, training efficiency, Hugging Face workflows, fine-tuning, LoRA/QLoRA, serving, and distributed training.
 
+## Tooling: deliberately deferred
+
+Platform and MLOps tooling is learned against a problem, not in advance. Decisions
+made so far, so they are not re-litigated:
+
+- **Hugging Face** — first used as a *consumer* at A1, loading pretrained models
+  and tokenizers. Nothing built before then is worth publishing: the regression
+  artifact is two floats, and the tiny LLM is a teaching artifact. The first
+  thing worth putting on the Hub is a **LoRA adapter from A2**.
+- **MLflow** — introduced when experiment tracking earns its place, which is
+  around **L9** (many runs, minutes each, several hyperparameters) or A1–A2. Until
+  then `docs/qa-notes.md` records the numbers adequately, and adopting the tool
+  before feeling the problem it solves does not stick.
+- **Databricks** — out of scope unless a specific role requires it. It is a
+  commercial platform, not a concept; nothing here approaches the scale that
+  motivates it. The underlying idea, distributed processing, is met at A3 through
+  FSDP/ZeRO from the training side.
+
 ## Definition of milestone completion
 
 A milestone is complete when:
@@ -49,7 +67,7 @@ A milestone is complete when:
 
 ## Current position
 
-R1–R8 are complete: forward prediction, mean squared error, hand-derived gradients checked numerically, a training loop compared across four learning rates, plots of the fit and the loss curves, a NumPy rewrite trained on seeded noisy data with a train/test split, L1/L2 regularization swept across penalty strengths, and a batching sweep comparing full-batch, mini-batch and SGD.
+R1–R10 are complete, closing Phase 1: forward prediction, mean squared error, hand-derived gradients checked numerically, a training loop compared across four learning rates, plots of the fit and the loss curves, a NumPy rewrite trained on seeded noisy data with a train/test split, L1/L2 regularization swept across penalty strengths, a batching sweep comparing full-batch, mini-batch and SGD, Momentum/RMSprop/Adam implemented by hand, and a scikit-learn comparison that agrees to fourteen digits.
 
-Next is Regression Milestone R9 in `TASKS.md`: implement Momentum, RMSprop and Adam one at a time, inspecting the extra state each carries.
+Next is Milestone L1 in `TASKS.md`, opening Phase 2: create the medieval-kingdom text dataset, build a word-level vocabulary, and implement token-to-ID and ID-to-token mappings. No PyTorch yet — L1 and L2 are strings, dictionaries and integer IDs.
 
