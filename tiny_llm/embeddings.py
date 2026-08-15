@@ -147,9 +147,48 @@ if __name__ == "__main__":
     print(f"  sum              {tuple(out.shape)}")
     print()
 
+    # ---- a batch: several sequences at once -------------------------------
+    def short(vector, keep=3):
+        """First few numbers of a vector, so the output stays readable."""
+        return "[" + ", ".join(f"{v:6.3f}" for v in vector[:keep]) + ", ...]"
+
     batch = torch.tensor([EXAMPLES[i][0] for i in range(3)])
-    print(f"  a batch of 3     {tuple(batch.shape)} -> {tuple(model(batch).shape)}")
-    print("    (the same position rows are reused for every sequence in the batch)")
+    batch_out = model(batch)
+
+    print("a batch: three training examples stacked")
+    print("  INPUT")
+    for i, row in enumerate(batch.tolist()):
+        print(f"    sequence {i}:  {row}  {[ITOS[t] for t in row]}")
+    print(f"    shape {tuple(batch.shape)}  =  3 sequences x 4 tokens")
+    print()
+
+    print("  OUTPUT")
+    for i in range(len(batch)):
+        print(f"    sequence {i}:")
+        for position in range(BLOCK_SIZE):
+            word = ITOS[batch[i][position].item()]
+            print(f"       position {position} ({word:7}) -> {short(batch_out[i][position])}")
+    print(f"    shape {tuple(batch_out.shape)}  =  3 sequences x 4 positions x {D_MODEL} numbers")
+    print("      B = batch (how many sequences)")
+    print("      T = time  (how many positions in each)")
+    print("      C = channels (numbers per position, i.e. d_model)")
+    print()
+
+    print("  the batch dimension is just independent copies, stacked:")
+    print(f"    m(batch[0])            -> {tuple(model(batch[0]).shape)}")
+    print(f"    equals batch_out[0]?      {torch.allclose(model(batch[0]), batch_out[0])}")
+    print()
+
+    print("  position rows are SHARED across the batch.")
+    print("  subtract each position's word row and the same position row is left:")
+    position_row_0 = model.position(torch.tensor(0))
+    for i in range(len(batch)):
+        word_row  = model.token(batch[i][0])
+        remainder = batch_out[i][0] - word_row
+        word      = ITOS[batch[i][0].item()]
+        print(f"    sequence {i}:  out[{i},0] - word({word:7}) = {short(remainder)}"
+              f"   matches position 0? {torch.allclose(remainder, position_row_0)}")
+    print(f"    the position-0 row itself   = {short(position_row_0)}")
     print()
 
     # ---- stage 3 ----------------------------------------------------------
