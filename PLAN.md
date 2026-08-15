@@ -71,7 +71,7 @@ A milestone is complete when:
 
 R1–R10 are complete, closing Phase 1: forward prediction, mean squared error, hand-derived gradients checked numerically, a training loop compared across four learning rates, plots of the fit and the loss curves, a NumPy rewrite trained on seeded noisy data with a train/test split, L1/L2 regularization swept across penalty strengths, a batching sweep comparing full-batch, mini-batch and SGD, Momentum/RMSprop/Adam implemented by hand, and a scikit-learn comparison that agrees to fourteen digits.
 
-L1 is complete, opening Phase 2: the medieval-kingdom corpus, a word-level vocabulary of 14 tokens, and the token-to-ID / ID-to-token mappings, with the 34.1% majority-class baseline recorded before any model exists.
+L1–L2 are complete, opening Phase 2: the medieval-kingdom corpus, a 14-token vocabulary, the token/ID mappings with the 34.1% majority-class baseline recorded before any model exists, and encode/decode plus 38 shifted next-token training pairs.
 
-Next is Milestone L2 in `TASKS.md`: implement encode and decode, then build fixed-length input sequences with shifted next-token targets. Still no PyTorch — L2 is lists and integer IDs.
+Next is Milestone L3 in `TASKS.md`: represent batches as PyTorch tensors, inspect shapes, and add token and simple positional embeddings. This is where PyTorch enters — and where the scalars-before-matrices rule first bites, since an embedding lookup is built as list indexing before it is a matrix row.
 

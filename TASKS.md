@@ -160,8 +160,8 @@ Submit the code and terminal output for review before beginning R2. Be prepared 
 - [x] Create the small medieval-kingdom dataset.
 - [x] Build a word-level vocabulary.
 - [x] Create token-to-ID and ID-to-token mappings.
-- [ ] Implement encode and decode operations.
-- [ ] Build fixed-length input sequences and shifted targets.
+- [x] Implement encode and decode operations.
+- [x] Build fixed-length input sequences and shifted targets.
 - [x] Handle unknown tokens or document why the closed dataset does not need them yet.
 
 ### Validation

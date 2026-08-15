@@ -11,7 +11,7 @@ what is new about language models.
 
 Every number here was produced by running the project's own code.
 
-Covers L1.
+Covers L1–L2.
 
 ---
 
@@ -181,7 +181,140 @@ Two things that follow, both learned the hard way in Phase 1:
 
 ---
 
-## Part 2 — Scalars before matrices
+## Part 2 — Training examples: encode, decode, shifted targets
+
+### Where the shift actually happens
+
+Not in any display code — in the slice offsets inside `build_examples`:
+
+```python
+(ids[i : i + block_size],  ids[i + 1 : i + block_size + 1])
+      ^                          ^^^^^
+   starts at i                starts at i+1
+```
+
+That `+1` is the entire mechanism. Both slices are the same length; `y`'s simply
+begins one position later.
+
+```
+the ID stream, with positions:
+  index        0        1        2        3        4        5
+  id          12        5       11       12        6       12
+  word       the     king    ruled      the  kingdom      the
+
+example i=0, block_size=4:
+  x = ids[0:4] ->     the     king    ruled      the
+  y = ids[1:5] ->             king    ruled      the  kingdom
+
+example i=1:
+  x = ids[1:5] ->             king    ruled      the  kingdom
+  y = ids[2:6] ->                     ruled      the  kingdom      the
+```
+
+Three consequences:
+
+- **`x` and `y` mostly overlap** — three of four tokens are shared. Only `y`'s
+  last token is new. `y` is not a different sequence; it is the same stream,
+  offset. Asserted in one line: `y[:-1] == x[1:]`.
+- **`y[i]` is always the token following `x[i]`.** Every position carries its own
+  answer.
+- **Consecutive examples overlap too** — example `i=1`'s `x` *is* example `i=0`'s
+  `y`. The window advances one token at a time.
+
+### Every position is a training example
+
+A language model does not produce one prediction per sequence. **It produces one
+at every position** — at L7 the output shape is `[sequence_length, vocab_size]`,
+one vocab-sized row per input position.
+
+So a single forward pass over `x = [the, king, ruled, the]` gives:
+
+```
+  position  model sees                        must predict
+         0  the                                       king
+         1  the king                                 ruled
+         2  the king ruled                             the
+         3  the king ruled the                     kingdom
+```
+
+Four predictions, four targets, four errors, one pass. The loss is their average.
+
+### Why not (context, single_target) pairs?
+
+Storing it the obvious way:
+
+```
+(["the"],                        "king")
+(["the","king"],                 "ruled")
+(["the","king","ruled"],         "the")
+(["the","king","ruled","the"],   "kingdom")
+```
+
+gives the same four lessons but needs **four forward passes**, each discarding
+everything except its final position's output.
+
+It is not more *data* — the corpus is identical either way. It is four times the
+**compute** to extract the same lessons. At `block_size=4` that is a 4× saving; at
+a real model's `block_size=1024` it is 1024×, and training the other way would be
+flatly impossible. This is why every language model uses the shifted form.
+
+### And this is where causal masking comes from
+
+Look at position 1. Its target is `"ruled"`, and it must predict that from
+`"the king"` — but the full input `[the, king, ruled, the]` sits in front of the
+model, with `"ruled"` at position 2.
+
+If position 1 can see position 2, the task is free: the answer is in the input.
+The model would score perfectly during training and generate nonsense at
+inference, where future tokens genuinely do not exist yet.
+
+**The causal mask blocks each position from seeing anything after itself.** That
+is what makes "predict every position at once" legitimate rather than cheating,
+and it is the constraint implemented at L4.
+
+### The off-by-one
+
+```
+len(build_examples(ids, block_size)) == len(ids) - block_size
+```
+
+Not `- block_size + 1`. The final window needs one token *beyond* its own end to
+have a target, so it stops one position earlier. Measured: 42 tokens give 39
+examples at `block_size=3`, 38 at 4, 37 at 5.
+
+The test that actually catches an error here is not the count — it is
+`test_every_token_transition_is_covered`, which builds the set of all 41 adjacent
+pairs in the corpus and the set of all `(x[i], y[i])` pairs across every example
+and asserts they are equal. An off-by-one at either end drops a transition; a
+count test alone would not notice.
+
+### Continuous stream or per-line?
+
+The corpus is eight separate sentences, so whether windows may span line breaks is
+a real choice:
+
+| | examples at `block_size=4` |
+| --- | --- |
+| continuous (all 42 tokens as one stream) | **38** |
+| per-line (windows stay inside a sentence) | 10 |
+
+**Continuous was chosen.** Nearly 4× the training data from the same corpus, it is
+what real language models do, and in this text every line begins with `"the"`, so
+cross-boundary transitions are consistent rather than noise. If generation runs
+sentences together at L10, this is why.
+
+### Materialising the examples is a convenience, not the norm
+
+38 examples of 4 tokens is 152 stored tokens from a 42-token corpus — the overlap
+is real duplication. It is accepted here because it is simple and inspectable.
+
+Real implementations do not materialise the list at all: they keep the token
+stream once and slice a window on demand when a batch is needed, picking random
+offsets into the stream. That is what L9 will do.
+
+---
+
+## Part 3 — Scalars before matrices
 
 The working rule for this phase: **build every component explicitly first, then
 convert it to tensors.** Plain Python numbers and loops, on a hand-sized example,
@@ -221,7 +354,7 @@ implementation you read will use. It is just not the starting point.
 
 ---
 
-## Part 3 — Why Phase 1 had no softmax or temperature
+## Part 4 — Why Phase 1 had no softmax or temperature
 
 Neither is missing by oversight — there was nothing for them to act on.
 

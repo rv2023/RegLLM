@@ -44,7 +44,7 @@ Where they disagree, that order is the order of authority.
 
 ## Current status
 
-**Phase 1 complete (R1–R10). L1 done. Next up: L2 — encode/decode and shifted target sequences.**
+**Phase 1 complete (R1–R10). L1–L2 done. Next up: L3 — tensors and embeddings, where PyTorch enters.**
 
 | Milestone | Result |
 | --- | --- |
@@ -76,7 +76,8 @@ run), `train_r7.py` (regularization sweep), `train_r8.py` (batching sweep),
 comparison).
 
 **`tiny_llm/`** — `data/kingdom.txt` (the eight-sentence corpus),
-`tokenizer.py` (vocabulary and the token/ID mappings).
+`tokenizer.py` (vocabulary and the token/ID mappings), `dataset.py`
+(encode/decode and the 38 shifted training pairs).
 
 ## Environment
 
