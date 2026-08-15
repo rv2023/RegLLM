@@ -1,7 +1,14 @@
-"""R8 - SGD and mini-batch training, carrying R7's L1/L2 penalties forward.
+"""R9 - optimizer progression: plain GD, Momentum, RMSprop, Adam.
 
-Self-contained: generates its own data with the same seed and call order as
-training.py, so `batch_size = len(x_train)` reproduces the R6/R7 results exactly.
+Self-contained, and deliberately full-batch: R8 already varies batch size, and
+varying both at once would make results impossible to attribute.
+
+Each optimizer is a small class with the same interface:
+
+    opt = Adam(lr=0.01)
+    m, c = opt.step(m, c, dm, dc)
+
+which is close to torch.optim, so L9 becomes recognition rather than learning.
 """
 
 import matplotlib
@@ -16,9 +23,10 @@ TRUE_C        = 7.0
 NOISE_SIGMA   = 2.0
 LEARNING_RATE = 0.01
 
-EPOCHS_SHORT  = 200        # endpoints still differ - shows mini-batch ahead
-EPOCHS_LONG   = 20000      # everyone has converged - shows the advantage is speed
-SHUFFLE_SEED  = 0          # separate from SEED so the data never moves
+BETA = 0.9        # momentum / RMSprop decay
+B1   = 0.9        # Adam first moment
+B2   = 0.999      # Adam second moment
+EPS  = 1e-8
 
 rng = np.random.default_rng(SEED)
 
@@ -31,8 +39,6 @@ train_idx, test_idx = order[:split], order[split:]
 
 x_train, y_train = x[train_idx], y[train_idx]
 x_test,  y_test  = x[test_idx],  y[test_idx]
-
-FULL = len(x_train)        # 40 - "full batch" means the whole training set
 
 
 def predict(x, m, c):
@@ -50,109 +56,136 @@ def gradients(x, y_true, y_pred):
     return dm, dc
 
 
-def penalty(m, lam, kind):
-    if kind == "none":
-        return 0
-    elif kind == "l1":
-        return lam * np.abs(m)
-    elif kind == "l2":
-        return lam * m ** 2
-    else:
-        raise ValueError(f"unknown kind: {kind!r} (expected 'none', 'l1' or 'l2')")
+# --------------------------------------------------------------------------
+# Optimizers.  Each carries its own state, zeroed in __init__ and persisting
+# across every call to step().  state() exists only so the traces can print it.
+# --------------------------------------------------------------------------
+
+class PlainGD:
+    name = "plain GD"
+
+    def __init__(self, lr=LEARNING_RATE):
+        self.lr = lr
+
+    def step(self, m, c, dm, dc):
+        return m - self.lr * dm, c - self.lr * dc
+
+    def state(self):
+        return {}
 
 
-def penalty_gradient(m, lam, kind):
-    if kind == "none":
-        return 0
-    elif kind == "l1":
-        return lam * np.sign(m)
-    elif kind == "l2":
-        return 2 * lam * m
-    else:
-        raise ValueError(f"unknown kind: {kind!r} (expected 'none', 'l1' or 'l2')")
+class Momentum:
+    name = "momentum"
+
+    def __init__(self, lr=LEARNING_RATE, beta=BETA):
+        self.lr = lr
+        self.beta = beta
+        self.v_m = 0.0
+        self.v_c = 0.0
+
+    def step(self, m, c, dm, dc):
+        self.v_m = self.beta * self.v_m + dm
+        self.v_c = self.beta * self.v_c + dc
+        return m - self.lr * self.v_m, c - self.lr * self.v_c
+
+    def state(self):
+        return {"v_m": self.v_m, "v_c": self.v_c}
 
 
-def total_loss(y_true, y_pred, m, lam, kind):
-    return mse(y_true, y_pred) + penalty(m, lam, kind)
+class RMSprop:
+    name = "RMSprop"
+
+    def __init__(self, lr=LEARNING_RATE, beta=BETA, eps=EPS):
+        self.lr = lr
+        self.beta = beta
+        self.eps = eps
+        self.s_m = 0.0
+        self.s_c = 0.0
+
+    def step(self, m, c, dm, dc):
+        self.s_m = self.beta * self.s_m + (1 - self.beta) * dm ** 2
+        self.s_c = self.beta * self.s_c + (1 - self.beta) * dc ** 2
+        m -= self.lr * dm / (np.sqrt(self.s_m) + self.eps)
+        c -= self.lr * dc / (np.sqrt(self.s_c) + self.eps)
+        return m, c
+
+    def state(self):
+        return {"s_m": self.s_m, "s_c": self.s_c}
 
 
-def total_gradients(x, y_true, y_pred, m, lam, kind):
-    dm, dc = gradients(x, y_true, y_pred)
-    dm += penalty_gradient(m, lam, kind)      # penalty applies to m only, never c
-    return dm, dc
+class Adam:
+    name = "Adam"
+
+    def __init__(self, lr=LEARNING_RATE, b1=B1, b2=B2, eps=EPS):
+        self.lr = lr
+        self.b1 = b1
+        self.b2 = b2
+        self.eps = eps
+        self.v_m = 0.0
+        self.v_c = 0.0
+        self.s_m = 0.0
+        self.s_c = 0.0
+        self.t = 0            # counts UPDATES, never reset
+
+    def step(self, m, c, dm, dc):
+        self.t += 1           # before the bias correction: 1 - b1**0 would be 0
+
+        self.v_m = self.b1 * self.v_m + (1 - self.b1) * dm
+        self.v_c = self.b1 * self.v_c + (1 - self.b1) * dc
+        self.s_m = self.b2 * self.s_m + (1 - self.b2) * dm ** 2
+        self.s_c = self.b2 * self.s_c + (1 - self.b2) * dc ** 2
+
+        vm_hat = self.v_m / (1 - self.b1 ** self.t)
+        vc_hat = self.v_c / (1 - self.b1 ** self.t)
+        sm_hat = self.s_m / (1 - self.b2 ** self.t)
+        sc_hat = self.s_c / (1 - self.b2 ** self.t)
+
+        m -= self.lr * vm_hat / (np.sqrt(sm_hat) + self.eps)
+        c -= self.lr * vc_hat / (np.sqrt(sc_hat) + self.eps)
+        return m, c
+
+    def state(self):
+        return {"v_m": self.v_m, "s_m": self.s_m, "t": self.t}
 
 
-def numerical_gradients(x, y_true, m, c, lam, kind, h=1e-5):
-    def loss(mm, cc):
-        return total_loss(y_true, predict(x, mm, cc), mm, lam, kind)
-
-    dm = (loss(m + h, c) - loss(m - h, c)) / (2 * h)
-    dc = (loss(m, c + h) - loss(m, c - h)) / (2 * h)
-    return dm, dc
-
-
-def check_gradients(x, y_true, m, c, lam, kind, tolerance=1e-4):
-    gm, gc = total_gradients(x, y_true, predict(x, m, c), m, lam, kind)
-    nm, nc = numerical_gradients(x, y_true, m, c, lam, kind)
-    print(f"  m={m}, c={c}, lam={lam}, kind={kind}")
-    print(f"    dL/dm  analytical={gm:10.4f}  numerical={nm:10.4f}  ok={abs(gm - nm) < tolerance}")
-    print(f"    dL/dc  analytical={gc:10.4f}  numerical={nc:10.4f}  ok={abs(gc - nc) < tolerance}")
-
-
-def update_parameters(m, c, dm, dc, learning_rate):
-    return m - learning_rate * dm, c - learning_rate * dc
-
-
-def train(x, y_true, m, c, learning_rate, epochs, batch_size,
-          lam=0.0, kind="none", seed=SHUFFLE_SEED):
-    """Mini-batch gradient descent.
-
-    batch_size == len(x) is full-batch; batch_size == 1 is strict SGD.
-    History holds one entry per EPOCH, measured over the whole training set,
-    so runs with different batch sizes share an x-axis.
-    """
-    rng = np.random.default_rng(seed)          # own generator; data never moves
-    n = len(x)
+def train(x, y_true, m, c, optimizer, iterations):
+    """Full-batch training. The optimizer must be FRESH - reusing one carries
+    its state into the next run and produces numbers you cannot explain."""
     history = []
-    updates = 0
-
-    for _ in range(epochs):
-        order = rng.permutation(n)             # reshuffled every epoch
-        for start in range(0, n, batch_size):
-            idx = order[start:start + batch_size]   # short final batch is fine
-            xb, yb = x[idx], y_true[idx]
-
-            dm, dc = total_gradients(xb, yb, predict(xb, m, c), m, lam, kind)
-            m, c = update_parameters(m, c, dm, dc, learning_rate)
-            updates += 1
-
-        history.append(mse(y_true, predict(x, m, c)))   # full set, not the batch
-
-    return m, c, history, updates
+    for _ in range(iterations):
+        y_pred = predict(x, m, c)
+        history.append(mse(y_true, y_pred))
+        dm, dc = gradients(x, y_true, y_pred)
+        m, c = optimizer.step(m, c, dm, dc)
+    return m, c, history
 
 
-def label(batch_size):
-    if batch_size == FULL:
-        return "full-batch"
-    return "SGD" if batch_size == 1 else "mini-batch"
+def trace(make_optimizer, steps=8):
+    """Print the optimizer's internal state for the first few updates."""
+    opt = make_optimizer()
+    m = c = 0.0
+    print(f"  {opt.name}")
+    for _ in range(steps):
+        dm, dc = gradients(x_train, y_train, predict(x_train, m, c))
+        before = m
+        m, c = opt.step(m, c, dm, dc)
+        bits = "  ".join(f"{k}={v:11.4f}" for k, v in opt.state().items())
+        print(f"    g_m={dm:10.4f}  {bits}  step={m - before:8.4f}  m={m:8.4f}")
+    print()
 
 
-def sweep(batch_sizes, epochs, learning_rate=LEARNING_RATE, lam=0.0, kind="none"):
-    results = {}
-    header = f"{'mode':11} {'batch':>5} {'updates':>8}   {'m':>9} {'c':>9}  {'train MSE':>10} {'test MSE':>9}"
-    print(header)
-    for bs in batch_sizes:
-        m, c, history, updates = train(x_train, y_train, 0.0, 0.0,
-                                       learning_rate, epochs, bs, lam, kind)
-        tr = mse(y_train, predict(x_train, m, c))    # evaluate WITHOUT the penalty
-        te = mse(y_test,  predict(x_test,  m, c))
-        results[bs] = (m, c, history, updates, tr, te)
-        print(f"{label(bs):11} {bs:5} {updates:8}   {m:9.4f} {c:9.4f}  {tr:10.4f} {te:9.4f}")
-    return results
+def sweep(make_optimizers, iteration_counts):
+    print(f"  {'optimizer':11} {'iters':>6}   {'m':>8} {'c':>8}  {'train MSE':>10}")
+    for iters in iteration_counts:
+        for make in make_optimizers:
+            m, c, _ = train(x_train, y_train, 0.0, 0.0, make(), iters)
+            L = mse(y_train, predict(x_train, m, c))
+            print(f"  {make().name:11} {iters:6}   {m:8.4f} {c:8.4f}  {L:10.4f}")
+        print()
 
 
 if __name__ == "__main__":
-    BATCH_SIZES = [FULL, 8, 6, 1]
+    MAKERS = [PlainGD, Momentum, RMSprop, Adam]
 
     # ---- 1. the five-point reference from R1-R5 ---------------------------
     cx = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
@@ -163,75 +196,92 @@ if __name__ == "__main__":
     print("  gradients ", gradients(cx, cy, cp), "   expect (-108.0, -32.0)")
     print()
 
-    # ---- 2. full-batch must reproduce R6 ----------------------------------
-    print("full-batch baseline (must reproduce R6)")
-    bm, bc, _, bu = train(x_train, y_train, 0.0, 0.0, LEARNING_RATE, EPOCHS_LONG, FULL)
-    print(f"  m={bm:.4f}  c={bc:.4f}  updates={bu}     expect m=3.0707  c=6.2686")
+    # ---- 2. the class wrapper must not change plain GD --------------------
+    print("plain GD baseline (must reproduce R6)")
+    bm, bc, _ = train(x_train, y_train, 0.0, 0.0, PlainGD(), 20000)
+    print(f"  m={bm:.4f}  c={bc:.4f}     expect m=3.0707  c=6.2686")
     print()
 
-    # ---- 3. gradients still check out, penalty included -------------------
-    print("gradient checks")
-    check_gradients(x_train, y_train, 0.0, 0.0, 0.0, "none")
-    check_gradients(x_train, y_train, 2.0, 5.0, 1.0, "l2")
-    check_gradients(x_train, y_train, 2.0, 5.0, 1.0, "l1")
+    # ---- 3. degenerate cases: the cheapest correctness checks -------------
+    print("degenerate checks")
+    gm, gc, _ = train(x_train, y_train, 0.0, 0.0, PlainGD(), 2000)
+    zm, zc, _ = train(x_train, y_train, 0.0, 0.0, Momentum(beta=0.0), 2000)
+    print(f"  momentum beta=0 vs plain GD:  m {zm:.10f} vs {gm:.10f}  same={np.isclose(zm, gm, atol=1e-12)}")
+    am, ac, _ = train(x_train, y_train, 0.0, 0.0, Adam(b1=0.0, b2=0.0), 200)
+    print(f"  Adam b1=b2=0 (pure sign step): m={am:.4f}  c={ac:.4f}   expect ~lr*200 = 2.0")
     print()
 
-    # ---- 4. batch size, short budget: endpoints differ --------------------
-    print(f"batch-size sweep, {EPOCHS_SHORT} epochs (equal data seen)")
-    short = sweep(BATCH_SIZES, EPOCHS_SHORT)
+    # ---- 4. Adam's bias correction at t=1 ---------------------------------
+    print("Adam bias correction at t=1")
+    a = Adam()
+    dm0, dc0 = gradients(x_train, y_train, predict(x_train, 0.0, 0.0))
+    a.step(0.0, 0.0, dm0, dc0)
+    print(f"  g_m   = {dm0:12.4f}")
+    print(f"  v_m   = {a.v_m:12.4f}   (raw, biased toward zero)")
+    print(f"  v_hat = {a.v_m / (1 - a.b1):12.4f}   must equal g_m")
     print()
 
-    # ---- 5. batch size, long budget: everyone converges but SGD -----------
-    print(f"batch-size sweep, {EPOCHS_LONG} epochs")
-    long = sweep(BATCH_SIZES, EPOCHS_LONG)
+    # ---- 5. the comparison sweep ------------------------------------------
+    print("optimizer comparison")
+    sweep(MAKERS, [200, 2000, 20000])
+
+    # ---- 6. what the state actually does ----------------------------------
+    print("state traces, first 8 updates")
+    for make in MAKERS:
+        trace(make)
+
+    # ---- 7. both parameters swing in phase --------------------------------
+    print("momentum gradient signs (g_m and g_c flip together)")
+    opt = Momentum()
+    m = c = 0.0
+    print(f"    {'t':>2}  {'g_m':>10} {'sign':>5}  |  {'g_c':>9} {'sign':>5}")
+    for t in range(1, 11):
+        dm, dc = gradients(x_train, y_train, predict(x_train, m, c))
+        m, c = opt.step(m, c, dm, dc)
+        print(f"    {t:2}  {dm:10.2f} {'+' if dm > 0 else '-':>5}  |  {dc:9.2f} {'+' if dc > 0 else '-':>5}")
     print()
 
-    # ---- 6. SGD is fine once the learning rate matches the batch ----------
-    print("SGD at a smaller learning rate")
-    sweep([1], EPOCHS_SHORT, learning_rate=0.001)
+    # ---- 8. Adam was not worse, it was mismatched -------------------------
+    print("Adam at a learning rate chosen for Adam")
+    for lr in (0.01, 0.1):
+        m, c, _ = train(x_train, y_train, 0.0, 0.0, Adam(lr=lr), 200)
+        print(f"  Adam lr={lr:<5} 200 iters   m={m:8.4f} c={c:8.4f}  train MSE={mse(y_train, predict(x_train, m, c)):9.4f}")
     print()
 
-    # ---- 7. the penalty across batch sizes --------------------------------
-    # The equilibrium sits where the data gradient and the penalty gradient
-    # cancel, which does not depend on how often you step - so batch size
-    # changes how fast that point is reached, not where it is.
-    print(f"L2 lambda=0.1, {EPOCHS_SHORT} epochs - same lambda, different batch sizes")
-    sweep(BATCH_SIZES, EPOCHS_SHORT, lam=0.1, kind="l2")
-    print()
-    print(f"L1 lambda=0.1, {EPOCHS_SHORT} epochs")
-    sweep(BATCH_SIZES, EPOCHS_SHORT, lam=0.1, kind="l1")
-    print()
-
-    # ---- plots ------------------------------------------------------------
+    # ---- plots -------------------------------------------------------------
     plt.figure(figsize=(7.5, 4.5))
-    for bs in BATCH_SIZES:
-        plt.plot(short[bs][2], label=f"batch {bs} ({label(bs)})")
+    for make in MAKERS:
+        _, _, history = train(x_train, y_train, 0.0, 0.0, make(), 2000)
+        plt.plot(history, label=make().name)
     plt.yscale("log")
-    plt.xlabel("epoch")
+    plt.xlabel("iteration")
     plt.ylabel("train MSE (log scale)")
-    plt.title(f"Loss per epoch by batch size ({EPOCHS_SHORT} epochs, equal data seen)")
+    plt.title("Optimizers at lr=0.01, full batch")
     plt.legend()
     plt.grid(alpha=0.3)
     plt.tight_layout()
-    plt.savefig("r8_by_epoch.png", dpi=120)
+    plt.savefig("r9_optimizers.png", dpi=120)
     plt.close()
 
-    # the same curves against cumulative updates - the ranking flips
-    plt.figure(figsize=(7.5, 4.5))
-    for bs in BATCH_SIZES:
-        history = short[bs][2]
-        per_epoch = short[bs][3] // EPOCHS_SHORT
-        updates_axis = [(e + 1) * per_epoch for e in range(len(history))]
-        plt.plot(updates_axis, history, label=f"batch {bs} ({label(bs)})")
-    plt.xscale("log")
-    plt.yscale("log")
-    plt.xlabel("cumulative updates (log scale)")
-    plt.ylabel("train MSE (log scale)")
-    plt.title("The same runs, counted by update instead of by epoch")
+    # the parameter-space path: momentum's overshoot is worth seeing once
+    plt.figure(figsize=(6.5, 5))
+    for make in MAKERS:
+        opt = make()
+        m = c = 0.0
+        path = [(m, c)]
+        for _ in range(300):
+            dm, dc = gradients(x_train, y_train, predict(x_train, m, c))
+            m, c = opt.step(m, c, dm, dc)
+            path.append((m, c))
+        plt.plot([p[0] for p in path], [p[1] for p in path], label=make().name)
+    plt.scatter([TRUE_M], [TRUE_C], marker="*", s=150, color="black", zorder=5, label="true (3, 7)")
+    plt.xlabel("m")
+    plt.ylabel("c")
+    plt.title("Path through parameter space, 300 iterations")
     plt.legend()
     plt.grid(alpha=0.3)
     plt.tight_layout()
-    plt.savefig("r8_by_update.png", dpi=120)
+    plt.savefig("r9_paths.png", dpi=120)
     plt.close()
 
-    print("wrote r8_by_epoch.png, r8_by_update.png")
+    print("wrote r9_optimizers.png, r9_paths.png")

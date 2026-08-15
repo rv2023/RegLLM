@@ -1102,6 +1102,114 @@ at about `lr` per step.
 Two different problems, two different accumulators. Adam keeps both. The formulas
 look similar enough that the distinction is easy to lose.
 
+### Why Adam does not reuse Momentum's `v` or RMSprop's `s`
+
+A natural question when the three optimizers sit side by side. Three reasons.
+
+**1. Momentum's `v` is not Adam's `v`.** Different formulas:
+
+```
+momentum   v = beta * v + g              -> settles at g/(1-beta) = 10g
+Adam       v = b1 * v + (1 - b1) * g     -> settles at g
+```
+
+Momentum's is an unnormalized running **sum**; Adam's is a proper weighted
+**average**. Ten times apart:
+
+```
+  t   momentum v    adam v
+   1       100.00     10.00
+   4       343.90     34.39
+   8       569.53     56.95
+  steady:    1000.0    100.0
+```
+
+Substituting one for the other would hand Adam a 10× learning rate it was not
+designed for. Momentum's speedup comes precisely *from* that `10g`; Adam
+deliberately normalises it away, because it divides by `sqrt(s)` and needs a
+genuine average of `g` in the numerator.
+
+**2. RMSprop's `s` has the same form but a different decay.** Both are
+`s = beta*s + (1-beta)*g**2`, so this one is shareable in form — but RMSprop uses
+`beta=0.9` and Adam uses `b2=0.999`:
+
+```
+  t   rmsprop s     adam s
+   1      1000.0       10.0
+   4      3439.0       39.9
+   8      5695.3       79.7
+  steady:  10000.0    10000.0     (same destination, ~100x different arrival)
+```
+
+That gap is exactly why Adam needs bias correction and RMSprop mostly does not:
+`b2=0.999` warms up so slowly that the raw `s` is useless for hundreds of steps.
+
+**3. State depends on the trajectory.** Even with identical formulas the values
+could not be reused, because each optimizer visits different parameters.
+Momentum's `v` at iteration 50 was accumulated from the gradients momentum met on
+its zigzag path; Adam at iteration 50 is somewhere else entirely (`m≈0.5` versus
+momentum's `m≈3`). Different position, different gradient, different state.
+
+**Optimizer state is a running summary of the path that optimizer took.** Two
+optimizers running separately have nothing to share.
+
+### What can be factored out
+
+The pattern `x = beta*x + (1-beta)*value` appears three times (Adam's `v`, Adam's
+`s`, RMSprop's `s`). A shared helper is legitimate:
+
+```
+class EWMA:
+    def __init__(self, beta):
+        self.beta = beta
+        self.value = 0.0
+        self.t = 0
+
+    def update(self, x):
+        self.t += 1
+        self.value = self.beta * self.value + (1 - self.beta) * x
+        return self.value
+
+    def corrected(self):
+        return self.value / (1 - self.beta ** self.t)
+```
+
+Adam would hold four (`v_m, v_c, s_m, s_c`), RMSprop two, each with its own
+`beta`. Momentum stays separate because its formula genuinely differs.
+
+For four optimizers on two parameters the explicit version is easier to read and
+easier to check against these notes — the point of R9 is seeing the arithmetic,
+not hiding it behind an abstraction. For a real library it is the right call, and
+roughly what PyTorch does.
+
+### Passing classes, not instances
+
+`train_r9.py` keeps a list of the four **classes**, not four objects:
+
+```
+MAKERS = [PlainGD, Momentum, RMSprop, Adam]
+
+for cls in MAKERS:
+    m, c, _ = train(x_train, y_train, 0.0, 0.0, cls(), iters)
+```
+
+Classes are callable in Python — calling one runs `__init__` and returns a new
+object. So `cls()` is `PlainGD()`, a fresh optimizer with its state zeroed.
+
+**That freshness is the reason the list holds classes.** Four already-built
+optimizers would be reused by every run in the sweep, inheriting `v`, `s` and `t`
+from the previous run — the same shape as the R2 bug where a function appended to
+a list it did not own. Passing the class means each run constructs its own.
+
+Two related notes on style:
+
+- Naming the parameter `make_optimizers` suggests factory *functions*. They are
+  classes; `optimizer_classes` / `cls` reads truthfully.
+- `cls().name` constructs a throwaway object just to read a **class attribute**
+  (`name` sits in the class body, not in `__init__`). `cls.name` reads it
+  directly, with no instance. Harmless, but it blurs exactly the
+  class-versus-instance distinction worth keeping sharp.
+
 ### Practical notes
 
 **Memory.** Adam stores two extra numbers per parameter, so optimizer state is
