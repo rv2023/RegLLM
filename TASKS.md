@@ -134,7 +134,7 @@ Submit the code and terminal output for review before beginning R2. Be prepared 
 - [x] Plot data, fitted line, and loss history.
 - [x] Add a train/test split and report test MSE.
 - [x] Implement and compare L1 and L2 regularization.
-- [ ] Implement full-batch, stochastic, and mini-batch gradient descent.
+- [x] Implement full-batch, stochastic, and mini-batch gradient descent.
 - [ ] Implement Momentum, RMSprop, and Adam one at a time.
 - [ ] Compare results with scikit-learn and document what its API replaces.
 

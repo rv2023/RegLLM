@@ -7,7 +7,7 @@ at [MILESTONES.md](../MILESTONES.md).
 Every number here was produced by running the project's own code — none are
 illustrative.
 
-Covers R1–R7 complete, plus the R8 concepts worked through so far.
+Covers R1–R8 complete, plus the R9 optimizer concepts worked through so far.
 
 ---
 
@@ -831,7 +831,298 @@ depends on the answer.
 
 ---
 
-## Part 7 — Modules, imports, and `__main__`
+## Part 7 — Optimizers (Momentum, RMSprop, Adam)
+
+*R9 — concepts worked through before implementation. Numbers measured on the R6
+training set, full-batch, `lr=0.01`, starting from `m = c = 0`.*
+
+### The four update rules
+
+Everything else in the loop is unchanged — same `predict`, `mse`, `gradients`.
+Only the line turning `g` into a step differs.
+
+```
+plain GD                          state: none
+    p = p - lr * g
+
+momentum                          state: v (one per parameter)
+    v = beta * v + g
+    p = p - lr * v
+
+RMSprop                           state: s (one per parameter)
+    s = beta * s + (1 - beta) * g**2
+    p = p - lr * g / (sqrt(s) + eps)
+
+Adam                              state: v, s (two per parameter) + step count t
+    v     = b1 * v + (1 - b1) * g
+    s     = b2 * s + (1 - b2) * g**2
+    v_hat = v / (1 - b1**t)
+    s_hat = s / (1 - b2**t)
+    p     = p - lr * v_hat / (sqrt(s_hat) + eps)
+```
+
+Defaults: `beta = 0.9`; `b1 = 0.9`, `b2 = 0.999`, `eps = 1e-8`. `t` starts at 1.
+
+Two momentum conventions exist — `v = beta*v + g` (PyTorch's, and the one these
+numbers use) and `v = beta*v + (1-beta)*g`. The second scales `v` down 10×, so a
+learning rate tuned for one is wrong for the other.
+
+### What each update actually consumes
+
+```
+GD         p = p - lr * g                          uses g
+momentum   p = p - lr * v                          uses v
+RMSprop    p = p - lr * g / (sqrt(s) + eps)        uses g AND s
+Adam       p = p - lr * v_hat/(sqrt(s_hat) + eps)  uses v AND s, not g
+```
+
+**`g` does not appear in Adam's update line.** It enters only through `v` and
+`s`. RMSprop keeps raw `g` in the numerator; Adam swaps it for the smoothed
+`v_hat` — that substitution *is* the difference between them. Adam is RMSprop
+with momentum in the numerator.
+
+### Written out for two parameters
+
+```
+state carried:  v_m, s_m, v_c, s_c, t          (5 numbers)
+
+each update:
+    t = t + 1                                   <- shared, counts UPDATES
+
+    g_m, g_c = gradients(x_batch, y_batch, predict(...))
+
+    v_m = b1 * v_m + (1 - b1) * g_m
+    s_m = b2 * s_m + (1 - b2) * g_m**2
+    m   = m - lr * (v_m/(1 - b1**t)) / (sqrt(s_m/(1 - b2**t)) + eps)
+
+    v_c = b1 * v_c + (1 - b1) * g_c
+    s_c = b2 * s_c + (1 - b2) * g_c**2
+    c   = c - lr * (v_c/(1 - b1**t)) / (sqrt(s_c/(1 - b2**t)) + eps)
+```
+
+- **Separate state per parameter.** `v_m` and `v_c` never mix. Sharing them
+  defeats the purpose — each parameter must be scaled by its *own* gradient
+  history.
+- **`t` is shared**, incremented once per update, never reset.
+- **`v` and `s` persist across updates**, initialised to zero once before
+  training. Re-initialising inside the loop reduces Adam to a fixed `g/|g|` sign
+  step. It will not crash; it will just train oddly — the same silent failure
+  mode as the R2 accumulation bug.
+
+### Everything updates once per batch
+
+The optimizer never sees epochs, only updates. With `batch_size=8` over 40
+points, `v`, `s` and `t` all advance five times per epoch; with full-batch, once.
+
+Adam's `t` therefore counts **updates**, not epochs, and must never reset — reset
+it per epoch and bias correction fires again every epoch, inflating each epoch's
+first step.
+
+### What it costs, measured
+
+```
+optimizer   iters          m        c  train MSE
+plain GD      200     3.4538   3.7774     3.7780
+momentum      200     3.0707   6.2684     2.4766     <- converged
+RMSprop       200     2.0197   2.0226   104.0524
+Adam          200     1.7358   1.7446   145.7151
+
+plain GD     2000     3.0710   6.2671     2.4766
+momentum     2000     3.0707   6.2686     2.4766
+RMSprop      2000     3.0657   6.2636     2.4777
+Adam         2000     3.3327   4.6100     3.0559
+
+plain GD    20000     3.0707   6.2686     2.4766
+momentum    20000     3.0707   6.2686     2.4766
+RMSprop     20000     3.0657   6.2636     2.4777
+Adam        20000     3.0708   6.2687     2.4766
+```
+
+**Momentum reaches in 200 iterations what plain GD needs 20,000 for** — same
+data, same learning rate, same gradients, a hundredfold difference from three
+extra lines.
+
+**RMSprop and Adam are *slower* here**, which is not a bug. See below.
+
+### Momentum: velocity builds, and overshoots
+
+```
+  t        g          v = 0.9v+g     step=lr*v        m
+  1   -272.6719       -272.6719      -2.7267     2.7267
+  2    -83.5390       -328.9437      -3.2894     6.0162
+  3    144.7949       -151.2544      -1.5125     7.5287
+  4    250.2348        114.1059       1.1411     6.3876
+  5    172.0263        274.7216       2.7472     3.6404
+  8   -196.0462       -167.7014      -1.6770     2.7029
+```
+
+`m` swings `2.7 → 6.0 → 7.5 → 6.4 → 3.6 → 2.7` and still lands exactly on
+`3.0707` by iteration 200.
+
+With `beta = 0.9` a sustained gradient accumulates until `v ≈ g/(1-beta) = 10g`,
+so **momentum's effective learning rate is about `lr/(1-beta)`, i.e. 10× `lr`**.
+That is where the speedup comes from, and why early steps look wild — `0.1` is
+above the `0.0845` divergence threshold plain GD had in R4. Momentum has
+different stability conditions, so it survives and damps out.
+
+### RMSprop: the step shrinks as `s` warms up
+
+```
+  t        g       s = .9s+.1g^2    sqrt(s)   g/sqrt(s)   step        m
+  1   -272.672          7435.0     86.226    -3.1623   -0.0316    0.0316
+  2   -270.205         13992.5    118.290    -2.2843   -0.0228    0.0545
+  4   -266.934         24943.9    157.936    -1.6901   -0.0169    0.0904
+  8   -262.216         40286.0    200.714    -1.3064   -0.0131    0.1471
+```
+
+`s` starts at 0 and climbs toward the typical squared gradient (`g**2 ≈ 72,000`).
+While it is small, `sqrt(s)` is small, so early steps are inflated. Once `s`
+settles at `g**2`, `sqrt(s) = |g|`, the ratio becomes exactly ±1, and the step
+converges to `lr` regardless of gradient size.
+
+### Adam: a constant step of exactly `lr`
+
+```
+  t        g          v        v_hat          s        s_hat    step        m
+  1   -272.672    -27.267    -272.672         74.3      74350.0  -0.0100    0.0100
+  2   -271.892    -51.730    -272.261        148.2      74137.4  -0.0100    0.0200
+  4   -270.331    -93.334    -271.399        294.4      73713.3  -0.0100    0.0400
+  8   -267.213   -153.498    -269.515        580.9      72869.5  -0.0100    0.0800
+```
+
+**The step is `-0.0100` every iteration — exactly `lr`.** `v_hat` tracks `g` and
+`s_hat` tracks `g**2`, so `v_hat/sqrt(s_hat) = g/|g| = -1`.
+
+That is Adam's defining property: while the gradient sign is consistent, each
+parameter moves by exactly the learning rate per step, whatever the gradient's
+magnitude.
+
+It also explains the "slow" result. Moving `m` from 0 to `3.07` at `0.01` per
+step needs ~307 steps; `c` needs ~627. At 200 iterations Adam has `m = 1.74` —
+on schedule, not broken.
+
+**So `lr` means something different for Adam.** For GD it scales the gradient;
+for Adam it *is* the step size. Choose it by asking "how far should a parameter
+move per step?" **Learning rates are not transferable between optimizers.**
+
+### Bias correction, visible
+
+With a constant gradient of `100`:
+
+```
+ t     v (raw)   1-b1^t     v_hat
+ 1      10.000    0.1000    100.000
+ 2      19.000    0.1900    100.000
+ 3      27.100    0.2710    100.000
+ 6      46.856    0.4686    100.000
+```
+
+The raw average reads `10` at step 1 — a tenth of the truth, because it started
+from zero. Dividing by `1 - b1**t` recovers exactly `100.000` every step.
+
+In the Adam trace above: at `t=1`, raw `v = -27.267` but `v_hat = -272.672`,
+exactly `g`; raw `s = 74.3` but `s_hat = 74,350`, exactly `g**2`.
+
+Without correction the first steps would be far too small, and `s` with
+`b2 = 0.999` would need ~1,000 steps to warm up. `1 - b1**t → 1` as `t` grows, so
+the correction fades — it only matters early, which is exactly why `t` must be
+the true update count.
+
+### How momentum cancels swings
+
+Expanding `v = beta*v + g` gives a weighted sum of every past gradient with
+exponentially fading weights:
+
+```
+v_t  =  g_t  +  0.9*g_(t-1)  +  0.81*g_(t-2)  +  0.729*g_(t-3)  +  ...
+```
+
+What happens next depends entirely on whether those gradients agree. Same
+magnitude `100` in both columns:
+
+```
+  t   consistent g     v        |   alternating g     v
+   1        100.0    100.00      |        100.0    100.00
+   2        100.0    190.00      |       -100.0    -10.00
+   4        100.0    343.90      |       -100.0    -18.10
+   8        100.0    569.53      |       -100.0    -29.98
+  12        100.0    717.57      |       -100.0    -37.77
+
+  steady state: consistent  -> g/(1-b) = 1000.00   (10.0x amplified)
+                alternating -> g/(1+b) =   52.63   ( 0.53x damped)
+  ratio: 19.0x
+```
+
+Terms with the same sign add; opposite signs subtract. A **19× difference in
+effective step** between a direction that keeps pointing the same way and one
+that keeps reversing — not a decision, just a consequence of the weighted sum.
+
+### Correction: on this problem both parameters swing together
+
+The natural story is "`c`'s gradient stays consistent while `m`'s alternates, so
+momentum speeds up the slow one". **Measurement says otherwise** — `g_m` and
+`g_c` flip sign in lockstep, every iteration:
+
+```
+  t    g_m       sign   |    g_c       sign
+   1    -272.67   -    |    -44.30   -
+   3     144.79   +    |     19.92   +
+   5     172.03   +    |     24.16   +
+   7    -175.47   -    |    -29.18   -
+  10      81.84   +    |     10.54   +
+```
+
+The oscillation is not along the `m` axis or the `c` axis. It is along the steep
+direction of the loss surface, which is a *mixture* of both (roughly 96% `m`,
+26% `c`) — the same `m`/`c` correlation seen since R6. Both coordinates project
+onto it, so both swing in phase.
+
+So momentum here is not separating a fast parameter from a slow one. It is
+buying the **10× effective learning rate** on the sustained part of the gradient,
+carrying both parameters down the long valley floor, while the in-phase
+oscillation damps out over the first hundred or so iterations. The cancellation
+mechanism is real; it just operates along the loss surface's own axes, not along
+`m` and `c`.
+
+### `v` cancels, `s` never does
+
+RMSprop and Adam *do* treat parameters separately, and unlike momentum they do
+not care about sign agreement at all — `s` accumulates `g**2`, always positive,
+so nothing cancels.
+
+- **`v` is a signed average** — disagreement across time destroys it. Handles
+  **oscillation**.
+- **`s` is a squared average** — always positive, never cancels. Handles
+  **scale**.
+
+`s_m` settles near `g_m**2 ≈ 72,000`; `s_c` near `g_c**2 ≈ 1,900`. Dividing each
+step by `sqrt(s)` divides out that parameter's own gradient scale, so both move
+at about `lr` per step.
+
+Two different problems, two different accumulators. Adam keeps both. The formulas
+look similar enough that the distinction is easy to lose.
+
+### Practical notes
+
+**Memory.** Adam stores two extra numbers per parameter, so optimizer state is
+**twice the model size**. Irrelevant with two parameters; at L12 it is a headline
+number when estimating training memory — a model that fits may not fit *with*
+Adam.
+
+**`eps` is not optional.** `s` starts at zero, so the first RMSprop or Adam step
+divides by `sqrt(0)`. `eps = 1e-8` is what prevents that.
+
+**Cheapest correctness checks.** `beta = 0` in momentum must collapse to exactly
+plain GD (`v = 0*v + g = g`). `b1 = b2 = 0` in Adam reduces it to `g/(|g|+eps)`, a
+pure sign step. If the degenerate cases misbehave, the general case will too.
+
+**Naming collision.** `m` is the slope here; `m` is also the conventional name
+for Adam's first moment (the original paper uses `m` and `v`). Use `v_m, v_c` and
+`s_m, s_c` so the parameter letters keep their meaning.
+
+---
+
+## Part 8 — Modules, imports, and `__main__`
 
 ### Importing a module runs it
 
@@ -895,7 +1186,7 @@ below it belongs in a different file.
 
 ---
 
-## Part 8 — Bugs hit, and what caused them
+## Part 9 — Bugs hit, and what caused them
 
 ### The sign inversion
 
@@ -1050,7 +1341,7 @@ Real noise is symmetric and zero-mean: `rng.normal(0, sigma, n)`.
 
 ---
 
-## Part 9 — Process questions
+## Part 10 — Process questions
 
 ### Where were those five training steps running?
 
@@ -1168,7 +1459,7 @@ once.
 
 ---
 
-## Part 10 — Reference numbers
+## Part 11 — Reference numbers
 
 ### Clean five-point dataset
 

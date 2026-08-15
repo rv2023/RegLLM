@@ -43,7 +43,7 @@ Where they disagree, that order is the order of authority.
 
 ## Current status
 
-**R1–R7 complete. Next up: R8 — SGD and mini-batch training.**
+**R1–R8 complete. Next up: R9 — optimizer progression (Momentum, RMSprop, Adam).**
 
 | Milestone | Result |
 | --- | --- |
@@ -54,6 +54,7 @@ Where they disagree, that order is the order of authority.
 | R5 Visualization | fitted line, loss curves, learning-rate comparison |
 | R6 Noisy data | NumPy rewrite, seeded noise, 80/20 split, train vs test MSE |
 | R7 Regularization | L1 and L2 by hand, swept across penalty strengths |
+| R8 Batching | full-batch / mini-batch / SGD; only full-batch truly converges |
 
 Recovering the true parameters from 50 noisy points, `lr=0.01`, 20,000 iterations:
 
@@ -67,7 +68,8 @@ noise floor 4.0000   (sigma^2)
 Files: `regression_from_scratch.py` (list-based functions), `regression_loop.py`
 (training loop), `regression_plot.py` (R5 charts), `training.py` (NumPy functions
 and seeded noisy data), `train_r6.py` (R6 training run and charts),
-`train_r7.py` (self-contained regularization sweep).
+`train_r7.py` (self-contained regularization sweep), `train_r8.py`
+(batching sweep, carrying the penalties forward).
 
 ## Environment
 
