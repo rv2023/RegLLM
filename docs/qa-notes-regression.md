@@ -7,7 +7,7 @@ at [MILESTONES.md](../MILESTONES.md).
 Every number here was produced by running the project's own code — none are
 illustrative.
 
-Covers R1–R9 complete, plus R10.
+Covers R1–R10 — the complete regression phase.
 
 ---
 

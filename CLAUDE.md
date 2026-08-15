@@ -45,11 +45,25 @@ If these ever disagree, the higher-numbered file loses.
    Tiny LLM: no Hugging Face `AutoModelForCausalLM`, `GPT2Model`, pretrained
    weights, or high-level `Trainer` APIs at any point in L1–L12. PyTorch is
    allowed from L3 for tensors and autograd; the architecture is built by hand.
-8. **Tick `TASKS.md` boxes only when a milestone has been signed off**, and say
+8. **Scalars before matrices. Always.** For every new component, build the
+   explicit version first — plain Python numbers and loops, on a hand-sized
+   example, covering the full end-to-end path — and only then convert it to
+   tensor form. This mirrors Phase 1, where lists and loops carried R1–R4 and
+   NumPy arrived at R6 only once the arithmetic was proven against known values.
+   Concretely for Phase 2: compute one attention head for a 3-token sequence with
+   nested loops and printed intermediates before writing `Q @ K.T`; do an
+   embedding lookup as a list index before it is a matrix row; run one forward
+   pass from token IDs to logits to loss by hand before any of it is batched.
+   **The scalar version is the reference the tensor version is checked against** —
+   the same cross-check discipline used when NumPy replaced the list code at R6.
+   Do not open with the matrix form because it is shorter.
+9. **Tick `TASKS.md` boxes only when a milestone has been signed off**, and say
    so when you do. The owner can veto any tick. Never mark work complete that
    has not actually run and been reviewed. Keep the status lines in `README.md`
    and `PLAN.md` pointing at the current milestone, and append to
-   `docs/qa-notes.md` as questions get answered.
+   the phase's Q&A notes as questions get answered — `docs/qa-notes-regression.md`
+   for R milestones, `docs/qa-notes-llm.md` for L milestones. Keep them separate;
+   do not append Phase 2 material to the Phase 1 file.
 
 ## Task format
 
@@ -85,10 +99,15 @@ corrected.
 
 ## Testing convention
 
-- `pytest`, with tests in `tests/`, named `test_<module>.py`.
-- Introduced at R3, when analytical gradients first need a numerical check —
-  not before. R1 and R2 verify by printed output against the test cases in
-  `TASKS.md`.
+- `pytest`, with tests in `tests/`, named `test_<module>.py`. Run with
+  `.venv/bin/python -m pytest tests/ -q`. `tests/conftest.py` puts `regression/`
+  and `tiny_llm/` on `sys.path`.
+- Every shared module in `tiny_llm/` gets tests, because it is imported by later
+  milestones and a change can break something several files away. Add them as
+  each module lands, not retroactively.
+- Scripts also keep their `__main__` self-checks against known reference values.
+  The two are complementary: the `__main__` block verifies the run you are
+  looking at, the suite verifies you have not broken an earlier milestone.
 - Every numerical test states its tolerance. Gradient checks compare analytical
   against finite-difference values.
 - Any run involving randomness fixes its seed.

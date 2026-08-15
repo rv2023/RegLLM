@@ -23,7 +23,8 @@ for a concept that has not yet been implemented by hand.
 | [TASKS.md](TASKS.md) | Current milestone detail: topics, tasks, validation, checkboxes |
 | [CLAUDE.md](CLAUDE.md) | Rules for any AI agent working in this repo |
 | [Codex.md](Codex.md) | The original project prompt, kept for context |
-| [docs/qa-notes.md](docs/qa-notes.md) | Questions answered during the build, bugs hit, and verified reference numbers |
+| [docs/qa-notes-regression.md](docs/qa-notes-regression.md) | Phase 1 Q&A: gradients, optimizers, bugs hit, verified reference numbers |
+| [docs/qa-notes-llm.md](docs/qa-notes-llm.md) | Phase 2 Q&A: tokenization, attention, training the tiny LLM |
 
 Where they disagree, that order is the order of authority.
 
@@ -43,7 +44,7 @@ Where they disagree, that order is the order of authority.
 
 ## Current status
 
-**Phase 1 complete (R1–R10). Next up: L1 — the tiny-LLM dataset and a hand-built tokenizer.**
+**Phase 1 complete (R1–R10). L1 done. Next up: L2 — encode/decode and shifted target sequences.**
 
 | Milestone | Result |
 | --- | --- |
@@ -67,12 +68,15 @@ test  MSE   1.6489
 noise floor 4.0000   (sigma^2)
 ```
 
-Files: `regression_from_scratch.py` (list-based functions), `regression_loop.py`
-(training loop), `regression_plot.py` (R5 charts), `training.py` (NumPy functions
-and seeded noisy data), `train_r6.py` (R6 training run and charts),
-`train_r7.py` (self-contained regularization sweep), `train_r8.py`
-(batching sweep, carrying the penalties forward), `train_r9.py` (four
-optimizers as classes), `train_r10.py` (scikit-learn comparison).
+**`regression/`** — `regression_from_scratch.py` (list-based functions),
+`regression_loop.py` (training loop), `regression_plot.py` (R5 charts),
+`training.py` (NumPy functions and seeded noisy data), `train_r6.py` (noisy-data
+run), `train_r7.py` (regularization sweep), `train_r8.py` (batching sweep),
+`train_r9.py` (four optimizers as classes), `train_r10.py` (scikit-learn
+comparison).
+
+**`tiny_llm/`** — `data/kingdom.txt` (the eight-sentence corpus),
+`tokenizer.py` (vocabulary and the token/ID mappings).
 
 ## Environment
 
@@ -95,27 +99,50 @@ Built up gradually, not created in advance:
 
 ```
 RegLLM/
-├── regression/
-│   ├── regression_from_scratch.py
-│   ├── optimizers.py
-│   └── experiments/
+├── regression/            done - one script per milestone, mostly standalone
 ├── tiny_llm/
-│   ├── data/
-│   ├── tokenizer.py
-│   ├── embeddings.py
-│   ├── attention.py
-│   ├── transformer.py
-│   ├── model.py
-│   ├── train.py
-│   ├── generate.py
-│   └── evaluate.py
-├── tests/
+│   ├── data/kingdom.txt   L1
+│   ├── tokenizer.py       L1  - shared, imported by everything below
+│   ├── dataset.py         L2  - encode/decode, shifted sequences
+│   ├── embeddings.py      L3
+│   ├── attention.py       L4, L5
+│   ├── transformer.py     L6
+│   ├── model.py           L7
+│   ├── train.py           L8, L9
+│   ├── generate.py        L10
+│   └── evaluate.py        L11
 └── requirements.txt
 ```
 
+Unlike `regression/`, where each milestone got a self-contained script,
+`tiny_llm/` holds **shared modules** — `tokenizer.py` is imported by every
+milestone from L2 onward, so duplicating it would invite the kind of drift that
+let the R3 sign error survive three review rounds.
+
 ## Tests
 
-`pytest`, with tests in `tests/` named `test_<module>.py`. Introduced at R3,
-where analytical gradients first need a finite-difference check — R1 and R2 are
-verified against the printed-output test cases in [TASKS.md](TASKS.md). Numerical
-tests state their tolerance; anything random fixes its seed.
+```bash
+.venv/bin/python -m pytest tests/ -q
+```
+
+`pytest`, in `tests/`, named `test_<module>.py`. `conftest.py` puts `regression/`
+and `tiny_llm/` on `sys.path` so the modules' bare imports resolve from the repo
+root.
+
+Two files:
+
+- **`test_regression.py`** — the reference values every Phase 1 milestone was
+  checked against: `274.0` and `(-108.0, -32.0)` on the five clean points, the
+  gradient sign table, analytical vs finite-difference agreement, the seeded
+  dataset's shape and split, and the R6 result. Includes regression tests for the
+  two real bugs — a function appending to a list it did not own, and NumPy
+  gradients returning arrays because the reduction was missing.
+- **`test_tokenizer.py`** — vocabulary contents and size, sorting, the ID round
+  trip, contiguous IDs from zero, module-relative data path, and the 34.1%
+  baseline.
+
+The suite arrived at the Phase 1/2 boundary rather than at R3. Phase 1's scripts
+were standalone, so breaking one could not break another, and verification lived
+in each script's `__main__` block. `tiny_llm/` is shared modules — `tokenizer.py`
+is imported by nine later files — so a change there can break something several
+files away with nothing to notice. That is what the suite is for.

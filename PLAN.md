@@ -32,6 +32,8 @@ Start with data representation and forward prediction, then progressively add lo
 
 Start with text and tokenization, then build embeddings, attention, transformer blocks, training, generation, and evaluation. High-level pretrained-model APIs are excluded during this phase.
 
+**Scalars before matrices.** Each component is built twice: first explicitly, with plain Python numbers and loops on a hand-sized example covering the whole end-to-end path, and only then in tensor form. The explicit version is the reference the tensor version is verified against — the same sequence Phase 1 used, where lists and loops carried R1–R4 and NumPy arrived at R6 only after the arithmetic was proven. The matrix form is the destination, not the starting point.
+
 ### Phase 3: Efficiency and pretrained models
 
 After the tiny model works, study precision, memory, training efficiency, Hugging Face workflows, fine-tuning, LoRA/QLoRA, serving, and distributed training.
@@ -47,7 +49,7 @@ made so far, so they are not re-litigated:
   thing worth putting on the Hub is a **LoRA adapter from A2**.
 - **MLflow** — introduced when experiment tracking earns its place, which is
   around **L9** (many runs, minutes each, several hyperparameters) or A1–A2. Until
-  then `docs/qa-notes.md` records the numbers adequately, and adopting the tool
+  then the `docs/qa-notes-*.md` files record the numbers adequately, and adopting the tool
   before feeling the problem it solves does not stick.
 - **Databricks** — out of scope unless a specific role requires it. It is a
   commercial platform, not a concept; nothing here approaches the scale that
@@ -69,5 +71,7 @@ A milestone is complete when:
 
 R1–R10 are complete, closing Phase 1: forward prediction, mean squared error, hand-derived gradients checked numerically, a training loop compared across four learning rates, plots of the fit and the loss curves, a NumPy rewrite trained on seeded noisy data with a train/test split, L1/L2 regularization swept across penalty strengths, a batching sweep comparing full-batch, mini-batch and SGD, Momentum/RMSprop/Adam implemented by hand, and a scikit-learn comparison that agrees to fourteen digits.
 
-Next is Milestone L1 in `TASKS.md`, opening Phase 2: create the medieval-kingdom text dataset, build a word-level vocabulary, and implement token-to-ID and ID-to-token mappings. No PyTorch yet — L1 and L2 are strings, dictionaries and integer IDs.
+L1 is complete, opening Phase 2: the medieval-kingdom corpus, a word-level vocabulary of 14 tokens, and the token-to-ID / ID-to-token mappings, with the 34.1% majority-class baseline recorded before any model exists.
+
+Next is Milestone L2 in `TASKS.md`: implement encode and decode, then build fixed-length input sequences with shifted next-token targets. Still no PyTorch — L2 is lists and integer IDs.
 
