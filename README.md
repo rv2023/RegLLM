@@ -79,8 +79,9 @@ comparison).
 `tokenizer.py` (vocabulary and the token/ID mappings), `dataset.py`
 (encode/decode and the 38 shifted training pairs), `embeddings.py` (token and
 position tables, built in plain Python then PyTorch and checked against each
-other), `attention.py` (one causal head as plain loops), `attention_tensor.py`
-(the same head in tensors, verified against the loops).
+other), `attention_plain.py` (one causal head as plain loops),
+`attention.py` (the same head in tensors, verified against the loops - this is
+the one later milestones import).
 
 ## Environment
 
@@ -109,6 +110,7 @@ RegLLM/
 │   ├── tokenizer.py       L1  - shared, imported by everything below
 │   ├── dataset.py         L2  - encode/decode, shifted sequences
 │   ├── embeddings.py      L3
+│   ├── attention_plain.py L4  - the loops, kept as the reference
 │   ├── attention.py       L4, L5
 │   ├── transformer.py     L6
 │   ├── model.py           L7

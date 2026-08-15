@@ -1677,7 +1677,8 @@ violation means the weights are not really weights.
 
 ## Part 5 — The tensor version, and proving it matches
 
-*L4 stages 2 and 3, in `attention_tensor.py`. `attention.py` keeps the loops.*
+*L4 stages 2 and 3, in `attention.py` - the module later milestones import.
+`attention_plain.py` keeps the loops as the reference.*
 
 ### Forty lines of loops become five
 
