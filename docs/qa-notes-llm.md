@@ -11,7 +11,7 @@ what is new about language models.
 
 Every number here was produced by running the project's own code.
 
-Covers L1–L3.
+Covers L1–L3, plus the L4 attention concepts worked through before implementation.
 
 ---
 
@@ -687,7 +687,241 @@ each, with the sequences processed in parallel. At L9 the same trade-off returns
 
 ---
 
-## Part 4 — Scalars before matrices
+## Part 4 — Attention
+
+*L4 — concepts worked through before implementation.*
+
+### The problem it solves
+
+After L3 each position's vector says two things: **which word** and **which
+position**. Nothing else.
+
+```
+position 0   "the"     [ 1.4, -3.8]
+position 1   "king"    [-0.7,  0.3]
+position 2   "ruled"   [-1.1,  1.9]
+```
+
+Position 2 describes `"ruled"` and contains nothing about `"the"` or `"king"`
+sitting before it. **Every position is an island.** To predict what comes next it
+has to gather information from earlier positions. That is attention's job.
+
+### Why not just average the earlier vectors?
+
+That would mix in context, but it treats every earlier word as equally
+important. Predicting after `"the king ruled the"`, the word `"king"` matters far
+more than the first `"the"`. A flat average throws that away.
+
+So: **a weighted average, where the weights depend on relevance.**
+
+### Query, key, value
+
+Every position produces three things:
+
+| | plain meaning | library analogy |
+| --- | --- | --- |
+| **query** | what I am looking for | your search term |
+| **key** | what I advertise | a book's index card |
+| **value** | what I actually contribute | the book's contents |
+
+Position `i` compares **its query** against **every position's key**. Good match
+-> high weight. It then reads the **values** in proportion to those weights.
+
+Key and value are separate because *being findable* and *being useful* are
+different jobs. A book's title helps you find it; the contents are what you take
+away.
+
+### Shared matrices, per-position vectors
+
+These are two different objects and running them together causes confusion:
+
+- **3 matrices** — `W_Q`, `W_K`, `W_V`. One set for the whole layer. Shared.
+- **3 vectors per position** — each position gets its own query, key and value by
+  putting **its own** `x` through those shared matrices.
+
+```
+W_Q (shared by all positions) = [[2, 0], [0, 3]]
+
+   the     x=[1, 0]  @ W_Q  ->  query=[2, 0]
+   king    x=[0, 1]  @ W_Q  ->  query=[0, 3]
+   ruled   x=[1, 1]  @ W_Q  ->  query=[2, 3]
+
+one matrix, three different queries - because the inputs differ.
+```
+
+Same recipe, different ingredients, different results. Those three matrices are
+**the only learned parameters in attention** — the embedding says what the word
+is, and the matrices decide what it looks for, offers and contributes.
+
+### The five steps
+
+```
+1.  query, key, value  =  x @ W_Q,  x @ W_K,  x @ W_V
+2.  scores             =  every query DOT every key        -> (T, T)
+3.  mask               =  set future scores to -inf
+4.  weights            =  softmax each row                  -> rows sum to 1
+5.  output             =  weights @ values                  -> (T, d_head)
+```
+
+Everything else in L4 is those five with shapes attached.
+
+### Worked through, by hand
+
+Three positions, two numbers each, hand-picked so every number is readable.
+
+```
+STEP 0 - what each position has
+   the     query=[1, 0]  key=[1, 0]  value=[10, 0]
+   king    query=[0, 1]  key=[0, 1]  value=[0, 20]
+   ruled   query=[1, 1]  key=[1, 1]  value=[5, 5]
+
+STEP 1 - score = my query DOT your key. Position 2 ("ruled"), query=[1,1]:
+   vs key of the    [1, 0]:  1*1 + 1*0 = 1
+   vs key of king   [0, 1]:  1*0 + 1*1 = 1
+   vs key of ruled  [1, 1]:  1*1 + 1*1 = 2
+
+STEP 2 - do that for every position. One score per PAIR:
+              looking at:  the  king  ruled
+   the    is asking        1     0     1
+   king   is asking        0     1     1
+   ruled  is asking        1     1     2
+
+STEP 3 - MASK. Position i may not look at anything after i.
+              looking at:   the   king  ruled
+   the    is asking          1   -inf   -inf
+   king   is asking          0      1   -inf
+   ruled  is asking          1      1      2
+
+STEP 4 - SOFTMAX each row. exp(-inf) = 0, so blocked positions get EXACTLY zero.
+              looking at:   the   king  ruled     sum
+   the    attention    1.00   0.00   0.00    1.00
+   king   attention    0.27   0.73   0.00    1.00
+   ruled  attention    0.21   0.21   0.58    1.00
+
+STEP 5 - OUTPUT = weighted average of the VALUES (not the keys).
+   position 0 (the):    1.0000*10 + 0.0000*0 + 0.0000*5   =  10.0000
+                        1.0000*0 + 0.0000*20 + 0.0000*5   =   0.0000
+   position 1 (king):   0.2689*10 + 0.7311*0 + 0.0000*5   =   2.6894
+                        0.2689*0 + 0.7311*20 + 0.0000*5   =  14.6212
+   position 2 (ruled):  0.2119*10 + 0.2119*0 + 0.5761*5   =   5.0000
+                        0.2119*0 + 0.2119*20 + 0.5761*5   =   7.1194
+```
+
+Reading it:
+
+- **Position 0 gets its own value back unchanged.** It is first; there is nothing
+  else to look at, so the weighted average has one term.
+- **Every row of weights sums to 1.00.** That is what makes it an *average*. A
+  position can redistribute its attention but never manufacture more.
+- **The weights form a triangle** — 1 non-zero, then 2, then 3. That shape *is*
+  causality.
+
+A rounding trap: the display shows `0.21` and `0.58`, but the true weights are
+`0.211942` and `0.576117`. Hand-checking with the rounded values will not
+reconcile.
+
+### The count that grows is positions, not output width
+
+The triangle (1, 2, 3 non-zero weights) is **how many positions each one may look
+at**. It is not the size of the output.
+
+Every output is 2 numbers, because every value is 2 numbers and an average of
+2-number vectors is a 2-number vector:
+
+```
+3 weights  x  3 values (2 numbers each)  ->  1 output (2 numbers)
+```
+
+The 3 is **consumed by the summing** — the same collapse as `np.mean` turning 40
+residuals into one gradient in Phase 1.
+
+### Why the mask exists — the concrete version
+
+This is the part that took several attempts. Forget the mechanics; look at what
+`y` is.
+
+```
+   input  x = ['the', 'king', 'ruled', 'the']
+   target y = ['king', 'ruled', 'the', 'kingdom']
+
+   position 0 must predict 'king'   -> 'king'  is at x[1]
+   position 1 must predict 'ruled'  -> 'ruled' is at x[2]
+   position 2 must predict 'the'    -> 'the'   is at x[3]
+```
+
+`y` is `x` shifted one position left — that is how L2 built it. So for every
+position but the last, **the correct answer is sitting one slot to the right in
+the input.**
+
+Without a mask, position 0 can look at position 1 and **just copy it**. It needs
+to understand nothing. The model would learn one rule — *"output whatever is one
+slot to my right"* — which scores 3 out of 4 in training, learns nothing about
+language, and is useless at generation, because when generating **there is no
+slot to the right.**
+
+The mask removes the shortcut. Position 0 must actually predict `'king'` from
+`'the'`.
+
+### Why there is no slot to the right at generation
+
+At training the whole sentence is already known — all four tokens go in at once.
+At generation the sequence **grows**:
+
+```
+   start:  ['the', 'king']   <- this is all the text that exists
+   step 0: model reads ['the', 'king']
+           positions available: 0..1. There is no position 2 yet.
+           model outputs -> 'ruled'
+   step 1: model reads ['the', 'king', 'ruled']
+           positions available: 0..2. There is no position 3 yet.
+           model outputs -> 'the'
+```
+
+When the model is producing `'ruled'`, position 2 does not exist — inventing it is
+the model's job.
+
+It is like practising for an exam with the answer sheet in front of you: perfect
+in practice, useless in the real thing, because what was learned was "read the
+answer" rather than "work it out".
+
+**The mask forces training to match generation.**
+
+### Mechanically, the mask is nothing
+
+```
+scores for position 1:   [0, 1, -inf, -inf]
+                               |
+                          softmax
+                               |
+weights for position 1:  [0.27, 0.73, 0.00, 0.00]
+```
+
+A weight of `0.00` times that position's value contributes **exactly zero**. The
+information is not reduced or discounted — it is absent.
+
+`-inf` is used because `exp(-inf) = 0`, giving a true zero rather than something
+merely small.
+
+### Shapes
+
+```
+x         (3, 2)     3 positions, 2 numbers each
+q, k, v   (3, 2)     one query/key/value per position
+scores    (3, 3)     one per PAIR of positions
+weights   (3, 3)     same, after masking and softmax
+output    (3, 2)     back to one vector per position
+```
+
+**In `(3,2)`, out `(3,2)`.** Attention changes *what each position holds* — it now
+contains gathered context — without changing how many positions there are or how
+wide they are. That is what makes `x = x + Attention(x)` possible at L6.
+
+Deferred to the implementation: scores are divided by `sqrt(d_head)` before
+softmax. Easier to justify after watching softmax misbehave without it.
+
+---
+
+## Part 5 — Scalars before matrices
 
 The working rule for this phase: **build every component explicitly first, then
 convert it to tensors.** Plain Python numbers and loops, on a hand-sized example,
@@ -727,7 +961,7 @@ implementation you read will use. It is just not the starting point.
 
 ---
 
-## Part 5 — Why Phase 1 had no softmax or temperature
+## Part 6 — Why Phase 1 had no softmax or temperature
 
 Neither is missing by oversight — there was nothing for them to act on.
 

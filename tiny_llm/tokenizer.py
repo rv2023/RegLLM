@@ -69,30 +69,106 @@ STOI, ITOS = build_mappings(VOCABULARY)
 if __name__ == "__main__":
     from collections import Counter
 
-    print(f"lines            {len(TEXT.strip().splitlines())}")
-    print(f"total tokens     {len(TOKENS)}")
-    print(f"vocabulary size  {VOCAB_SIZE}")
-    print(f"vocabulary       {VOCABULARY}")
+    print("=" * 70)
+    print("THE PROBLEM")
+    print("=" * 70)
+    print()
+    print("  A neural network multiplies and adds numbers. It cannot do")
+    print("  anything with the word 'kingdom'.")
+    print()
+    print("  So before any model exists, every word has to be turned into a")
+    print("  number. That is this file's whole job.")
     print()
 
-    print("round trip: itos[stoi[w]] == w for every word")
-    print(f"  all match: {all(ITOS[STOI[w]] == w for w in VOCABULARY)}")
-    print(f"  ids are exactly 0..{VOCAB_SIZE - 1}: {sorted(ITOS) == list(range(VOCAB_SIZE))}")
+    print("=" * 70)
+    print("STEP 1 - SPLIT THE TEXT INTO WORDS")
+    print("=" * 70)
+    print()
+    lines = TEXT.strip().splitlines()
+    print(f"  The corpus is {len(lines)} sentences:")
+    for line in lines:
+        print(f"      {line}")
+    print()
+    print(f"  Split on spaces and we have {len(TOKENS)} words in total.")
+    print(f"  The first ten:  {TOKENS[:10]}")
     print()
 
-    print("spot checks")
-    for word in ("a", "castle", "the", "visited"):
-        print(f"  stoi[{word!r}] = {STOI[word]:2}   itos[{STOI[word]}] = {ITOS[STOI[word]]!r}")
+    print("=" * 70)
+    print("STEP 2 - KEEP ONE COPY OF EACH WORD")
+    print("=" * 70)
+    print()
+    print(f"  {len(TOKENS)} words, but many repeat. Keeping only the distinct ones")
+    print(f"  leaves {VOCAB_SIZE}. That list is called the VOCABULARY:")
+    print()
+    for word in VOCABULARY:
+        print(f"      {word}")
+    print()
+    print("  It is sorted on purpose. A Python set has no reliable order, so")
+    print("  without sorting the numbering could come out different on another")
+    print("  run - and a model trained with one numbering is meaningless under")
+    print("  another.")
     print()
 
+    print("=" * 70)
+    print("STEP 3 - GIVE EACH WORD A NUMBER")
+    print("=" * 70)
+    print()
+    print("  Number them by their place in the sorted list:")
+    print()
+    for word in VOCABULARY:
+        print(f"      {word:11} -> {STOI[word]:2}")
+    print()
+    print("  And the same thing backwards, so we can turn numbers into words")
+    print("  again later when the model produces some:")
+    print()
+    for token_id in (0, 5, 12, 13):
+        print(f"      {token_id:2} -> {ITOS[token_id]!r}")
+    print()
+
+    print("=" * 70)
+    print("STEP 4 - DOES IT SURVIVE A ROUND TRIP?")
+    print("=" * 70)
+    print()
+    print("  Turn every word into its number and back again. If any word comes")
+    print("  back different, the mapping is broken.")
+    print()
+    broken = [w for w in VOCABULARY if ITOS[STOI[w]] != w]
+    if broken:
+        print(f"      BROKEN for: {broken}")
+    else:
+        print(f"      All {VOCAB_SIZE} words survive the round trip.")
+    print()
+    print(f"  The numbers run 0 to {VOCAB_SIZE - 1} with no gaps, which matters because")
+    print("  they will be used as row numbers into a table at L3. A gap would")
+    print("  mean a wasted row; a number too big would be an error.")
+    print()
+
+    print("=" * 70)
+    print("STEP 5 - THE SCORE TO BEAT, BEFORE ANY MODEL EXISTS")
+    print("=" * 70)
+    print()
     counts = Counter(TOKENS)
-    print("token frequencies")
-    for word, n in counts.most_common():
-        print(f"  {word:10} {n:2}   {n / len(TOKENS):5.1%}")
+    print("  How often each word appears:")
     print()
-
-    # The majority-class baseline. A model that ignores its input entirely and
-    # always predicts the most common token would be right this often. Anything
-    # at or below this at L11 has learned word frequency, not context.
-    most_common, n = counts.most_common(1)[0]
-    print(f"baseline: always predict {most_common!r} -> {n}/{len(TOKENS)} = {n / len(TOKENS):.1%}")
+    for word, n in counts.most_common():
+        bar = "#" * n
+        print(f"      {word:11} {n:2}  {bar}")
+    print()
+    common, n = counts.most_common(1)[0]
+    targets = TOKENS[1:]
+    baseline = targets.count(common) / len(targets)
+    print(f"  {common!r} is {n} of the {len(TOKENS)} words - far more than any other.")
+    print()
+    print("  So imagine a 'model' that reads nothing, understands nothing, and")
+    print(f"  answers {common!r} every single time. On the job we actually care")
+    print("  about - given some words, guess the next one - it would be right:")
+    print()
+    print(f"      {targets.count(common)} times out of {len(targets)}  =  {baseline:.1%}")
+    print()
+    print("  Write that number down now. When the real model reports its score")
+    print("  at L11, anything at or below 34% means it learned which word is")
+    print("  common and nothing else.")
+    print()
+    print(f"  For comparison, guessing at random from {VOCAB_SIZE} words would be right")
+    print(f"  about {1 / VOCAB_SIZE:.1%} of the time.")
+    print()

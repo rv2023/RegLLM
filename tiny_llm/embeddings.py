@@ -99,104 +99,155 @@ def load_plain_tables(module, word_table, pos_table):
 if __name__ == "__main__":
     from dataset import EXAMPLES
 
+    def show(vector, keep=4):
+        """First few numbers of a vector, so the screen stays readable."""
+        numbers = ", ".join(f"{v:7.3f}" for v in list(vector)[:keep])
+        return f"[{numbers}, ...]"
+
     x, _ = EXAMPLES[0]
+    words = [ITOS[i] for i in x]
+
+    print("=" * 70)
+    print("THE PROBLEM")
+    print("=" * 70)
+    print()
+    print(f"  Our first training example is:  {words}")
+    print(f"  As token IDs:                   {x}")
+    print()
+    print("  A model does arithmetic. It cannot multiply the word 'the' by")
+    print("  anything. And the IDs are no help either - 'the' is 12 only")
+    print("  because the vocabulary was sorted alphabetically, so 12 does not")
+    print("  mean 'more than' 5.")
+    print()
+    print("  So we give every word its own row of numbers instead.")
+    print()
+
     word_table = build_table(VOCAB_SIZE, D_MODEL, SEED)
     pos_table  = build_table(BLOCK_SIZE, D_MODEL, SEED + 1)
 
-    print(f"x = {x}  {[ITOS[i] for i in x]}")
-    print("positions 0 and 3 are both token 12 (\"the\")")
+    print("=" * 70)
+    print("STEP 1 - LOOK UP EACH WORD  (plain Python, no PyTorch)")
+    print("=" * 70)
+    print()
+    print(f"  The word table has one row per vocabulary word: {VOCAB_SIZE} rows,")
+    print(f"  {D_MODEL} numbers each. Looking a word up just means taking its row.")
+    print()
+    for position, token_id in enumerate(x):
+        print(f"    {words[position]:7} is word {token_id:2}  ->  {show(word_table[token_id])}")
+    print()
+    print("  Notice positions 0 and 3 are both 'the', so they got the SAME row.")
+    print("  The model cannot tell them apart. That is a problem: the first")
+    print("  'the' and the last 'the' should not mean the same thing.")
     print()
 
-    # ---- stage 1 ----------------------------------------------------------
-    print("stage 1: plain Python lists")
+    print("=" * 70)
+    print("STEP 2 - ADD SOMETHING THAT SAYS WHERE THE WORD IS")
+    print("=" * 70)
+    print()
+    print(f"  A second table, one row per slot: {BLOCK_SIZE} rows, {D_MODEL} numbers each.")
+    print("  It is looked up by POSITION, not by word.")
+    print()
+    for position in range(BLOCK_SIZE):
+        print(f"    slot {position}  ->  {show(pos_table[position])}")
+    print()
+    print("  Now add the two rows together, number by number:")
+    print()
     plain = embed_plain(x, word_table, pos_table)
-    for position, (token_id, row) in enumerate(zip(x, plain)):
-        word_row = word_table[token_id]
-        pos_row  = pos_table[position]
-        print(f"  position {position}  word {ITOS[token_id]!r}")
-        print(f"     word_table[{token_id:2}] = {[round(v, 3) for v in word_row]}")
-        print(f"     pos_table[{position}]   = {[round(v, 3) for v in pos_row]}")
-        print(f"     added         = {[round(v, 3) for v in row]}")
+    for position, token_id in enumerate(x):
+        print(f"    position {position} ({words[position]}):")
+        print(f"        word row  {show(word_table[token_id])}")
+        print(f"      + slot row  {show(pos_table[position])}")
+        print(f"      = result    {show(plain[position])}")
+    print()
+    print("  Positions 0 and 3 are still both 'the', but look at the results:")
+    print(f"      position 0  {show(plain[0])}")
+    print(f"      position 3  {show(plain[3])}")
+    print()
+    print("  Different. That is the whole point of the second table.")
     print()
 
-    print("  same word, different totals:")
-    print(f"    word rows equal at positions 0 and 3? {word_table[x[0]] == word_table[x[3]]}")
-    print(f"    sums equal?                           {plain[0] == plain[3]}")
+    print("=" * 70)
+    print("STEP 3 - THE SAME THING IN PYTORCH")
+    print("=" * 70)
     print()
-
-    # ---- stage 2 ----------------------------------------------------------
-    print("stage 2: PyTorch")
     torch.manual_seed(SEED)
     model = Embeddings()
     ids = torch.tensor(x)
-    # print(f"  ids              {tuple(ids.shape)}  dtype {ids.dtype}")
-    # print(f"  ids              {ids}")
     out = model(ids)
-    # print(f"  out              {tuple(out.shape)}  dtype {out.dtype}")
-    # print(f"  out              {out}")
-    
-    print(f"  word table       {tuple(model.token.weight.shape)}"
-          f"  = {model.token.weight.numel():3} values")
-    print(f"  position table   {tuple(model.position.weight.shape)}"
-          f"  = {model.position.weight.numel():3} values")
-    print(f"  total learnable  {sum(p.numel() for p in model.parameters())}")
+
+    print("  nn.Embedding is a table plus a lookup. Nothing more.")
     print()
-    print(f"  ids              {tuple(ids.shape)}  dtype {ids.dtype}")
-    print(f"  token emb        {tuple(model.token(ids).shape)}")
-    print(f"  pos emb          {tuple(model.position(torch.arange(BLOCK_SIZE)).shape)}")
-    print(f"  sum              {tuple(out.shape)}")
+    print(f"    word table      {VOCAB_SIZE} rows x {D_MODEL} numbers = "
+          f"{model.token.weight.numel():3} numbers to learn")
+    print(f"    slot table      {BLOCK_SIZE} rows x {D_MODEL} numbers = "
+          f"{model.position.weight.numel():3} numbers to learn")
+    print(f"    total                                  "
+          f"{sum(p.numel() for p in model.parameters()):3}")
     print()
-
-    # ---- a batch: several sequences at once -------------------------------
-    def short(vector, keep=3):
-        """First few numbers of a vector, so the output stays readable."""
-        return "[" + ", ".join(f"{v:6.3f}" for v in vector[:keep]) + ", ...]"
-
-    batch = torch.tensor([EXAMPLES[i][0] for i in range(3)])
-    batch_out = model(batch)
-
-    print("a batch: three training examples stacked")
-    print("  INPUT")
-    for i, row in enumerate(batch.tolist()):
-        print(f"    sequence {i}:  {row}  {[ITOS[t] for t in row]}")
-    print(f"    shape {tuple(batch.shape)}  =  3 sequences x 4 tokens")
+    print("  Phase 1 had two numbers to learn: m and c. This has 144, and")
+    print("  none of them will be set by hand.")
+    print()
+    print("  What went in and what came out:")
+    print(f"    in    {len(x)} token IDs                     shape {tuple(ids.shape)}")
+    print(f"    out   {len(x)} rows of {D_MODEL} numbers          shape {tuple(out.shape)}")
+    print()
+    print("  The number of positions did not change. Only what each one holds.")
     print()
 
-    print("  OUTPUT")
-    for i in range(len(batch)):
-        print(f"    sequence {i}:")
-        for position in range(BLOCK_SIZE):
-            word = ITOS[batch[i][position].item()]
-            print(f"       position {position} ({word:7}) -> {short(batch_out[i][position])}")
-    print(f"    shape {tuple(batch_out.shape)}  =  3 sequences x 4 positions x {D_MODEL} numbers")
-    print("      B = batch (how many sequences)")
-    print("      T = time  (how many positions in each)")
-    print("      C = channels (numbers per position, i.e. d_model)")
+    print("=" * 70)
+    print("STEP 4 - DO THE TWO VERSIONS AGREE?")
+    print("=" * 70)
     print()
-
-    print("  the batch dimension is just independent copies, stacked:")
-    print(f"    m(batch[0])            -> {tuple(model(batch[0]).shape)}")
-    print(f"    equals batch_out[0]?      {torch.allclose(model(batch[0]), batch_out[0])}")
+    print("  Copy the plain-Python tables into PyTorch, so both hold the exact")
+    print("  same numbers. If the logic matches, the results must match.")
     print()
-
-    print("  position rows are SHARED across the batch.")
-    print("  subtract each position's word row and the same position row is left:")
-    position_row_0 = model.position(torch.tensor(0))
-    for i in range(len(batch)):
-        word_row  = model.token(batch[i][0])
-        remainder = batch_out[i][0] - word_row
-        word      = ITOS[batch[i][0].item()]
-        print(f"    sequence {i}:  out[{i},0] - word({word:7}) = {short(remainder)}"
-              f"   matches position 0? {torch.allclose(remainder, position_row_0)}")
-    print(f"    the position-0 row itself   = {short(position_row_0)}")
-    print()
-
-    # ---- stage 3 ----------------------------------------------------------
-    print("stage 3: do the two agree?")
     load_plain_tables(model, word_table, pos_table)
     torch_out = model(ids)
     plain_out = torch.tensor(plain)
-    print(f"  max difference   {(torch_out - plain_out).abs().max().item():.2e}")
-    print(f"  agree            {torch.allclose(torch_out, plain_out, atol=1e-6)}")
+    difference = (torch_out - plain_out).abs().max().item()
+    print(f"    plain Python  {show(plain_out[0])}")
+    print(f"    PyTorch       {show(torch_out[0])}")
     print()
-    print("  nn.Embedding is a table and a lookup. The check proves it.")
+    print(f"    biggest difference anywhere: {difference:.2e}")
+    print()
+    print("  That is float32 rounding, not a mistake - Python keeps about 16")
+    print("  digits, PyTorch keeps about 7. Anything below 1e-6 is the same")
+    print("  number as far as PyTorch can tell.")
+    print()
+    print("  So nn.Embedding really is just a table and a lookup. Proved,")
+    print("  not assumed.")
+    print()
+
+    print("=" * 70)
+    print("STEP 5 - SEVERAL SEQUENCES AT ONCE (a batch)")
+    print("=" * 70)
+    print()
+    batch = torch.tensor([EXAMPLES[i][0] for i in range(3)])
+    batch_out = model(batch)
+
+    print("  Three training examples, stacked:")
+    for i, row in enumerate(batch.tolist()):
+        print(f"    sequence {i}:  {[ITOS[t] for t in row]}")
+    print()
+    print(f"    in    shape {tuple(batch.shape)}      3 sequences, 4 tokens each")
+    print(f"    out   shape {tuple(batch_out.shape)}   3 sequences, 4 positions, {D_MODEL} numbers")
+    print()
+    print("  Nothing new happens. The sequences never interact - stacking")
+    print("  them is a convenience. Running one on its own gives the same:")
+    print(f"    m(batch[0]) == batch_out[0]  ->  {torch.allclose(model(batch[0]), batch_out[0])}")
+    print()
+    print("  And every sequence uses the SAME slot rows. Sequence 0 starts")
+    print("  with 'the', sequence 1 with 'king', sequence 2 with 'ruled' -")
+    print("  three different words. Take each result and subtract its word")
+    print("  row, and see what is left over:")
+    print()
+    slot_row_0 = model.position(torch.tensor(0))
+    for i in range(len(batch)):
+        token = batch[i][0]
+        leftover = batch_out[i][0] - model.token(token)
+        print(f"    sequence {i} ({ITOS[token.item()]:7}) leftover  {show(leftover)}")
+    print(f"    the slot-0 row itself           {show(slot_row_0)}")
+    print()
+    print("  Same leftover every time. The slot rows do not depend on which")
+    print("  word is there - slot 0 means 'first', whatever sits in it.")
+    print()

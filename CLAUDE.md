@@ -57,7 +57,25 @@ If these ever disagree, the higher-numbered file loses.
    **The scalar version is the reference the tensor version is checked against** —
    the same cross-check discipline used when NumPy replaced the list code at R6.
    Do not open with the matrix form because it is shorter.
-9. **Tick `TASKS.md` boxes only when a milestone has been signed off**, and say
+9. **Explain plainly, and lead with the concrete.** In order: the problem the
+   thing solves, then a worked example with real printed numbers, then the name
+   for it, and only then the shapes and formal statement. Never open with
+   terminology or shapes. Introduce **one** new term at a time. Cut
+   forward-references to later milestones from a first explanation — they are
+   noise until the idea has landed. Re-read for accidental contradictions before
+   sending ("each position has a query" vs "the matrices are shared" read as a
+   contradiction and cost a round). After a hard concept, ask which specific part
+   is unclear rather than moving on. If an explanation fails, do not repeat it
+   louder — change the angle, usually to what breaks without the thing.
+10. **A module's `__main__` output is an explanation you can run.** Same shape as
+    rule 9: open with the problem the module solves, then numbered steps with
+    plain-word headers, and **state the conclusion after every block** — never
+    print a bare `True`/`False` and leave the reader to infer what it meant.
+    Prefer plain words to jargon ("slot" over "positional embedding index",
+    "numbers to learn" over "learnable parameters"). Show few enough numbers to
+    check by hand. `tiny_llm/tokenizer.py`, `dataset.py` and `embeddings.py` are
+    the pattern; keep new modules consistent with them.
+11. **Tick `TASKS.md` boxes only when a milestone has been signed off**, and say
    so when you do. The owner can veto any tick. Never mark work complete that
    has not actually run and been reviewed. Keep the status lines in `README.md`
    and `PLAN.md` pointing at the current milestone, and append to
