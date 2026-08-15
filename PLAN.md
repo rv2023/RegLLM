@@ -71,7 +71,7 @@ A milestone is complete when:
 
 R1–R10 are complete, closing Phase 1: forward prediction, mean squared error, hand-derived gradients checked numerically, a training loop compared across four learning rates, plots of the fit and the loss curves, a NumPy rewrite trained on seeded noisy data with a train/test split, L1/L2 regularization swept across penalty strengths, a batching sweep comparing full-batch, mini-batch and SGD, Momentum/RMSprop/Adam implemented by hand, and a scikit-learn comparison that agrees to fourteen digits.
 
-L1–L3 are complete, opening Phase 2: the medieval-kingdom corpus, a 14-token vocabulary, the token/ID mappings with the 34.1% majority-class baseline recorded before any model exists, encode/decode plus 38 shifted next-token training pairs, and token/position embeddings built in plain Python then PyTorch and verified against each other to float32 precision.
+L1–L4 are complete, opening Phase 2: the medieval-kingdom corpus, a 14-token vocabulary, the token/ID mappings with the 34.1% majority-class baseline recorded before any model exists, encode/decode plus 38 shifted next-token training pairs, token/position embeddings built in plain Python then PyTorch and verified against each other to float32 precision, and one causal self-attention head built the same way twice - loops first, then tensors, agreeing to float32 rounding at every intermediate.
 
-Next is Milestone L4 in `TASKS.md`: one causal self-attention head, from the Q/K/V projections through masking and softmax to the weighted sum of values. Per the scalars-before-matrices rule this starts as nested loops over a short sequence with every score printed, before it becomes `Q @ K.T`.
+Next is Milestone L5 in `TASKS.md`: run several attention heads side by side, concatenate their outputs and add an output projection. This is where `d_head = d_model / n_heads` becomes a real constraint rather than a single-head convenience.
 

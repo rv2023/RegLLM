@@ -11,7 +11,7 @@ what is new about language models.
 
 Every number here was produced by running the project's own code.
 
-Covers L1–L3, plus L4 stage 1 (one attention head in plain Python).
+Covers L1–L4.
 
 ---
 
@@ -1675,7 +1675,88 @@ violation means the weights are not really weights.
 
 ---
 
-## Part 5 — Scalars before matrices
+## Part 5 — The tensor version, and proving it matches
+
+*L4 stages 2 and 3, in `attention_tensor.py`. `attention.py` keeps the loops.*
+
+### Forty lines of loops become five
+
+```
+    Q = x @ W_Q                        (T x 8) @ (8 x 8) = (T x 8)
+    scores = Q @ K.T / sqrt(8)         (T x 8) @ (8 x T) = (T x T)
+    scores.masked_fill(future, -inf)
+    weights = scores.softmax(dim=-1)
+    out = weights @ V                  (T x T) @ (T x 8) = (T x 8)
+```
+
+Nothing new happens. Same arithmetic, same weights — the only difference is who
+writes the loops.
+
+`dim=-1` on the softmax means "along each row". Get it wrong and it normalises
+down the columns instead, which produces plausible numbers that mean nothing.
+
+The causal mask is a **buffer**, not a parameter: it is a fixed fact about
+position, identical for every sequence, and nothing about it is learned.
+
+### The check is the milestone
+
+Given identical weights, the two versions must agree. Comparing **every
+intermediate**, not just the output — a difference in the scores could cancel out
+by step 5 and hide a real bug:
+
+```
+        queries   biggest difference 2.38e-07   agree: True
+        keys      biggest difference 4.77e-07   agree: True
+        values    biggest difference 2.38e-07   agree: True
+        weights   biggest difference 5.96e-08   agree: True
+        output    biggest difference 2.38e-07   agree: True
+```
+
+Float32 rounding, as at L3. The tensor version computes exactly what the loops
+computed — **proved, not assumed**, which is the whole reason stage 1 exists.
+
+A tensor implementation that looks right is not the same as one that is right.
+A wrong one rarely crashes; it returns plausible numbers of the correct shape.
+
+### Two traps that break the check for non-reasons
+
+Both make stage 3 fail without any logic being wrong — which is exactly when
+people conclude the check itself is broken.
+
+**`nn.Linear` stores its weight transposed.**
+
+```
+   build_matrix(8, 8) gives     (8, 8)  as (in, out)
+   nn.Linear(8, 8).weight is    (8, 8)  as (out, in)
+```
+
+Loading one into the other needs `.T`. And here `d_head = d_model`, so the
+matrix is **square** — a missing `.T` does not crash, does not even produce a
+shape error. It silently computes something else. There is a test asserting the
+un-transposed version *disagrees*, so the check is verified to be capable of
+failing.
+
+**`nn.Linear` adds a bias unless told not to.** The plain version has none, so
+all three projections are built with `bias=False`.
+
+### Batching came free
+
+```
+        one sequence   (4, 8)      -> (4, 8)
+        three stacked  (3, 4, 8)   -> (3, 4, 8)
+        batch[0] matches the single run? True
+```
+
+Zero code changes. The plain version would need another loop; the tensor version
+carries the extra dimension along, because every sequence gets the same weights
+and the same mask.
+
+**That is the real argument for tensors** — not elegance. Batching, and running
+on a GPU, arrive without rewriting anything.
+
+---
+
+## Part 6 — Scalars before matrices
 
 The working rule for this phase: **build every component explicitly first, then
 convert it to tensors.** Plain Python numbers and loops, on a hand-sized example,
@@ -1715,7 +1796,7 @@ implementation you read will use. It is just not the starting point.
 
 ---
 
-## Part 6 — Why Phase 1 had no softmax or temperature
+## Part 7 — Why Phase 1 had no softmax or temperature
 
 Neither is missing by oversight — there was nothing for them to act on.
 

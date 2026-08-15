@@ -44,7 +44,7 @@ Where they disagree, that order is the order of authority.
 
 ## Current status
 
-**Phase 1 complete (R1–R10). L1–L3 done. Next up: L4 — a single causal self-attention head.**
+**Phase 1 complete (R1–R10). L1–L4 done. Next up: L5 — multi-head attention.**
 
 | Milestone | Result |
 | --- | --- |
@@ -79,7 +79,8 @@ comparison).
 `tokenizer.py` (vocabulary and the token/ID mappings), `dataset.py`
 (encode/decode and the 38 shifted training pairs), `embeddings.py` (token and
 position tables, built in plain Python then PyTorch and checked against each
-other).
+other), `attention.py` (one causal head as plain loops), `attention_tensor.py`
+(the same head in tensors, verified against the loops).
 
 ## Environment
 
