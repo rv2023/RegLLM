@@ -11,7 +11,7 @@ what is new about language models.
 
 Every number here was produced by running the project's own code.
 
-Covers L1–L3, plus the L4 attention concepts worked through before implementation.
+Covers L1–L3, plus L4 stage 1 (one attention head in plain Python).
 
 ---
 
@@ -886,6 +886,119 @@ answer" rather than "work it out".
 
 **The mask forces training to match generation.**
 
+### Turning scores into shares: what softmax does
+
+The scores are just numbers — some negative, no particular total. Shares are
+needed instead: all positive, adding to 1, usable as proportions. Two steps get
+there. Taking row 2 (`ruled`) of the real masked scores:
+
+```
+   scores   [-1.1599, 2.5561, -0.7664, -inf]
+
+   STEP ONE - raise 2.718 to the power of each score (that is exp).
+              always positive, and it grows fast:
+
+        -1.1599   ->     0.3135    (the)
+         2.5561   ->    12.8855    (king)
+        -0.7664   ->     0.4647    (ruled)
+           -inf   ->     0.0000    (the)
+                     ---------
+        total          13.6637
+
+   STEP TWO - divide each by that total, so they add up to 1:
+
+         0.3135 / 13.6637  =  0.0229    (the)
+        12.8855 / 13.6637  =  0.9430    (king)
+         0.4647 / 13.6637  =  0.0340    (ruled)
+         0.0000 / 13.6637  =  0.0000    (the)
+```
+
+Those four numbers *are* row 2 of the weights grid. Note `exp(-inf) = 0.0000`
+contributing nothing to the total — the mask's mechanism, in plain sight.
+
+### Why the size of a score gap matters: exp turns a difference into a ratio
+
+This is the link that makes the scaling argument readable. A gap between two
+scores becomes a **ratio** after exp:
+
+```
+   gap between two scores    exp(gap)            the odds
+         0.5                      1.6            1.6 to 1
+           1                      2.7            2.7 to 1
+           3                     20.1           20.1 to 1
+          10                  22026.5        22026.5 to 1
+          30         10686474581524.5           huge to 1
+```
+
+A gap of 3 is 20-to-1. A gap of 10 is 22,000-to-1. exp grows fast enough that a
+modest gap becomes total dominance:
+
+```
+   two scores   0.5 apart  ->  shares 0.3775 / 0.6225
+   two scores     3 apart  ->  shares 0.0474 / 0.9526
+   two scores    10 apart  ->  shares 0.0000 / 1.0000
+```
+
+Which is why score size matters at all, and why `sqrt(d_head)` exists.
+
+### This example does saturate, and the file says so
+
+Honest state at `D_HEAD = D_MODEL = 8`:
+
+```
+unscaled           biggest gap  29.81   biggest weight on last row 1.0000
+scaled by sqrt(8)  biggest gap  10.54   biggest weight on last row 0.9881
+```
+
+`10.5` is still past the point where one position takes nearly everything. The
+scaling moved this run **from hopeless to merely unlucky** — it did not fix it.
+Across 200 random starts the average biggest weight is `0.69` and about 30 in 200
+saturate; this seed is one of the 30.
+
+An earlier draft claimed "10.5, which is fine" while the grid directly above
+showed `0.9991` and `0.9881`. The text contradicted its own output. Worth
+remembering: **a claim next to a table has to survive reading the table.**
+
+### What saturation actually costs
+
+Not just "no gradient". Look at the outputs:
+
+```
+       position 0 after  [  1.185,  -0.698,   0.030,   0.989, ...]
+       position 1 after  [  1.184,  -0.698,   0.029,   0.987, ...]
+```
+
+Nearly identical. Row 1's shares were `0.9991` on position 0 and `0.0009` on
+itself, so `king` handed back almost a straight copy of `the` and kept nearly
+none of its own value.
+
+**A pinned softmax does not just stop learning — it throws information away.**
+
+### What changed, and what deliberately did not
+
+```
+   in    4 positions x 8 numbers   (straight from L3)
+   out   4 positions x 8 numbers
+```
+
+The **shape** is untouched, on purpose: the next stage expects the same shape
+back, which is what makes `x = x + Attention(x)` possible at L6.
+
+The **contents** are completely different:
+
+```
+    position 3 (the)
+       before  [  1.569,  -1.244,  -0.249,  -0.724, ...]
+       after   [ -0.288,   0.795,   2.393,  -1.723, ...]
+```
+
+Before, each row said only "I am this word, in this slot". After, each row is a
+blend of the values of every position up to and including itself, in the
+proportions from step 4.
+
+A shape line alone reads as "nothing happened" when `D_HEAD = D_MODEL`. The
+before/after rows are what show the work.
+
 ### Mechanically, the mask is nothing
 
 ```
@@ -918,6 +1031,647 @@ wide they are. That is what makes `x = x + Attention(x)` possible at L6.
 
 Deferred to the implementation: scores are divided by `sqrt(d_head)` before
 softmax. Easier to justify after watching softmax misbehave without it.
+
+### Stage 1, built and run
+
+`attention.py` implements the five steps in plain Python — lists and loops, no
+PyTorch and no matrix syntax, so every intermediate is printable. Run on three
+positions with `d_model=4`, `d_head=2` and random untrained weights:
+
+```
+scores (nothing blocked yet)
+                the     king    ruled
+      the    0.027   -0.186   -0.142
+     king   -0.028   -0.210   -0.122
+    ruled   -0.069   -0.063    0.004
+
+after masking
+                the     king    ruled
+      the    0.027      -inf     -inf
+     king   -0.028   -0.210      -inf
+    ruled   -0.069   -0.063    0.004
+
+after softmax
+                the     king    ruled
+      the   1.0000   0.0000   0.0000
+     king   0.5453   0.4547   0.0000
+    ruled   0.3245   0.3265   0.3490
+```
+
+Two things to notice.
+
+**Untrained attention is nearly uniform.** Row 2 is `0.32 / 0.33 / 0.35` — an
+almost equal split. Random weights produce scores clustered near zero, and
+softmax over near-equal scores returns near-equal shares. At this point the head
+is doing little more than averaging its visible positions. The *structure* is
+correct and the *behaviour* is uninformative, which is exactly what an untrained
+model should look like. Training is what makes those shares uneven.
+
+**Position 0's output is its own value, unchanged.** Its weighted average has a
+single term with weight `1.0000`. That is not a special case in the code — it
+falls out of having nothing before it.
+
+### The three sizes
+
+```
+                <-------------- D_MODEL = 8 numbers -------------->
+        the       1.427  -3.795   0.272   0.486  -1.651  -1.347  -1.150   0.224
+       king      -0.725   0.329   1.632  -0.350   0.647   3.467  -0.546  -0.199   <-- T = 4 rows
+      ruled      -1.129   1.884  -2.687   0.516  -0.435  -0.490   1.984  -0.353
+        the       1.569  -1.244  -0.249  -0.724  -2.715  -2.730  -0.541   0.526
+
+    T       = 4   how many words we look at at once   (the rows)
+    D_MODEL = 8   numbers describing each word        (the columns)
+    D_HEAD  = 8   numbers per word once inside the head
+```
+
+**T never changes.** Four words in, four out. Only the width changes,
+`D_MODEL -> D_HEAD`, and the step-1 matrices are what do it.
+
+### How one query number is built
+
+Every input number gets a say, so one output number needs one weight per input
+number — 8 of them:
+
+```
+        input number       weight        product
+            1.427     x     0.455   =    0.6499
+           -3.795     x    -0.386   =    1.4655
+            0.272     x     0.070   =    0.0191
+            ...
+                                        --------
+          query number 0 =              -0.8531
+```
+
+That is a **dot product**: 8 numbers against 8 numbers giving **one** number.
+
+### Why the matrix has that shape
+
+8 weights produced one number. Eight output numbers need **8 sets of 8** = 64
+weights, stored as a table with 8 rows and 8 columns where each column is one
+set. That is all "matrix" means here — the sets, side by side.
+
+**The shape is always `(numbers coming in) x (numbers going out)`.** True for the
+Q/K/V projections here, the output projection at L5, the MLP at L6, and the LM
+head at L7.
+
+### A set of weights belongs to a query NUMBER, not to a word
+
+This misreading came up repeatedly, and counting settles it:
+
+```
+4 words x 8 query numbers = 32 numbers altogether
+but only 8 sets of weights. They cannot be per word.
+```
+
+The set for query number 0 builds the **first** number of *every* word; the set
+for query number 1 builds the second number of every word. A set fills a
+**column** of the query table, not a row.
+
+```
+                 out 0    out 1    out 2   ...
+                 set 0    set 1    set 2
+      the       -0.853    0.910   -0.639
+     king        2.138    1.271    0.928
+    ruled       -0.610   -3.659   -0.178
+      the       -1.579   -0.403   -0.839
+
+    ACROSS a row  - one word, all 8 sets -> its 8 query numbers
+    DOWN a column - 4 different words, all using the SAME set
+```
+
+The word "set" invited the confusion. Naming things after **what they build** —
+"the 8 weights for query number 3" — rather than numbering them removes it.
+
+### The same weights are used for every word
+
+There is one query matrix, not one per position:
+
+```
+        set 0:   0.455,  0.070,  0.113,  0.077,  0.076,  0.700,  0.254,  0.257
+
+            the row x set 0, summed  ->   -0.8531
+           king row x set 0, summed  ->    2.1384
+          ruled row x set 0, summed  ->   -0.6098
+            the row x set 0, summed  ->   -1.5786
+```
+
+Same weights every time; different rows in, different numbers out. **64 weights
+per matrix however many words go through them.**
+
+Note the two `the` rows give different answers, because L3 already made their
+rows differ by slot.
+
+### Three matrices, not one
+
+The sets above are the **query** matrix only. Keys and values have their own,
+built the same way with their own numbers and no weights shared:
+
+```
+        W_Q  builds queries    set 0:   0.455,  0.070,  0.113, ...
+        W_K  builds keys       set 0:   0.827, -0.380,  0.421, ...
+        W_V  builds values     set 0:   0.033, -0.015, -0.471, ...
+
+        each matrix   8 sets x 8 weights = 64
+        three of them                    = 192 weights in this head
+```
+
+Which is why one input row comes out as three different rows.
+
+### From one word to the matrix form
+
+The whole of step 1, built up from a single word:
+
+```
+one word:
+    (1 x 8) row  .  (8) W_Q set 0   =  query number 0
+    (1 x 8) row  .  (8) W_Q set 1   =  query number 1
+    ...
+    (1 x 8) row  .  (8) W_Q set 7   =  query number 7
+
+collect them:
+    (1 x 8) word row   @   (8 x 8) W_Q   =   (1 x 8) query
+
+and since the SAME W_Q serves every word, stack the rows:
+    (4 x 8) all words  @   (8 x 8) W_Q   =   (4 x 8) all queries
+```
+
+Verified: the stacked multiply gives numbers identical to the four separate
+loops.
+
+**That is stage 2 in one line.** The tensor version is not a different algorithm
+— it is the same dot products with the loops handed to the library:
+
+```
+    Q = X @ W_Q        (4 x 8) @ (8 x 8) = (4 x 8)
+    K = X @ W_K
+    V = X @ W_V
+```
+
+Counting: 8 dots for a query, 8 for a key, 8 for a value = 24 per word, x 4 words
+= **96 dot products**, using the **192 weights**.
+
+Step 2 then does something different in kind — it dots the *queries against the
+keys* rather than against weights. `Q @ K.T` is `(4x8) @ (8x4) = (4x4)`, one score
+per pair of words. Get the transpose wrong and you compute `(8x4) @ (4x8) =
+(8x8)`, a valid matrix relating *numbers* to each other instead of *words*.
+
+### Why 8 numbers per word, and not 1?
+
+Because of what one number cannot express. Keep only `W_K`'s first column, so
+each word advertises a single value. A score is query times key, so try every
+query there is:
+
+```
+        the  advertises   5.08
+       king  advertises  -0.34
+      ruled  advertises  -3.48
+        the  advertises   5.80
+
+        query =    -5   ->  top choice: ruled
+        query =  -0.1   ->  top choice: ruled
+        query =   0.1   ->  top choice: the
+        query =     5   ->  top choice: the
+```
+
+**Only two words can ever win** — the biggest key and the smallest. A positive
+query picks one, a negative query the other, and that is the entire range of
+opinions available. Here that strands `'the' (5.08)` and `'king' (-0.34)`: two of
+the four words **can never be anyone's first choice, whatever query you write.**
+
+With 8 numbers a query can ask for a *combination* — high on this, low on that —
+so any word becomes reachable, and each position can prefer a different order.
+
+### A score is a dot product, not every-number-against-every-number
+
+A natural misreading: "every Q number multiplies every K number, so 8 x 8 x 4
+scores". It does not. Query number 0 meets key number 0, number 1 meets number 1,
+and so on — **8 products, position-matched, summed to ONE number**:
+
+```
+cell [row 0, col 0] = query of "the" dotted with key of "the", scaled
+
+   position     query      key     product
+       0        -0.853    5.081    -4.3350
+       1         0.910    1.811     1.6485
+       2        -0.639    2.342    -1.4968
+       3        -0.153   -0.419     0.0642
+       4        -1.416    1.324    -1.8742
+       5         2.189   -0.604    -1.3225
+       6         1.887    1.030     1.9443
+       7        -0.968    5.433    -5.2579
+                                 ---------
+   raw dot product:             -10.6294
+
+   divide by sqrt(D_HEAD) = sqrt(8) = 2.8284
+      -10.6294 / 2.8284 = -3.7581
+
+   and the grid shows: -3.7581
+```
+
+So the counting is:
+
+```
+   one pair    = 8 products summed  -> 1 number
+   16 pairs                          -> 16 numbers
+   arranged as                          4 x 4
+```
+
+**The 8 disappears** because it is the axis being summed over — the inner
+dimension of `Q @ K.T`, `(4x8) @ (8x4) = (4x4)`. What survives is one score per
+pair of *words*, not per pair of numbers.
+
+If it really were every-number-against-every-number you would compute
+`(8x4) @ (4x8) = (8x8)` — a valid matrix relating *query numbers* to each other
+rather than words. That is the transpose mistake, and it does not crash.
+
+Reading the grid:
+
+```
+                      the      king     ruled       the
+          the   -3.7581   -0.0886    3.7947   -2.5871
+         king    6.0381   -0.9794   -4.2429    5.3038
+        ruled   -1.1599    2.5561   -0.7664   -1.5451
+          the   -5.9131    0.1924    4.6261   -4.3019
+
+   row i     word i's query, tested against all four keys
+   column j  word j's key, tested against all four queries
+   diagonal  each word against itself
+```
+
+Nothing is blocked yet — row 0 has values in columns 1–3, which are `the`'s
+future. Masking replaces those with `-inf` next.
+
+### Every number traces back
+
+Any value in this file can be followed to its source. `-0.336`, for instance, is
+`king`'s key number 0:
+
+```
+"king" the word
+   -> token id 5                         (tokenizer.py, L1)
+   -> 8-number row: word row + slot row  (embeddings.py, L3)
+   -> dot with W_K set 0                 (attention.py, step 1)
+   = -0.336
+```
+
+The same row dotted with **`W_Q` set 0** instead gives `king`'s *query* number 0.
+Same input, different weights, different meaning — one is what `king` advertises,
+the other what it is looking for.
+
+Every word gets all three:
+
+```
+    position 1  'king'
+       row in (L3)   -0.725   0.329   1.632  -0.350   0.647   3.467  -0.546  -0.199
+       query          2.138   1.271   0.928   0.623   0.617  -1.933   1.981  -0.373
+       key           -0.336  -2.555  -2.011   2.761   1.215   0.069  -0.188  -2.944
+       value          0.412  -0.815  -1.783  -0.394  -1.405   0.404  -1.276   1.022
+```
+
+Two things visible there. **Positions 0 and 3 are both `the` and all six of their
+rows differ**, because the rows going in already differed by the slot numbers L3
+added. And **key and value look nothing alike for the same word** — independent
+matrices, so *what a word advertises* and *what it hands over* are unrelated. A
+word can be easy to find for one reason and useful for another.
+
+### Why exactly 8?
+
+Nothing derives it. It is `D_MODEL`, inherited from L3, because one head is as
+wide as its input. Measuring what width actually buys — how many of the 4
+positions can want a different order, over 60 random starts:
+
+```
+         1 numbers per word  ->  1.98 distinct orders out of 4
+         2 numbers per word  ->  3.05
+         4 numbers per word  ->  3.50
+         8 numbers per word  ->  3.55   <- ours
+        16 numbers per word  ->  3.72
+```
+
+`1.98` at one number is the "only two orders exist" result, measured. The jump to
+2 buys most of the gain; past 4 it flattens, because there are only 4 words to
+rank. **8 is generous here rather than necessary.** Real models use 64 or 128 per
+head because they rank thousands of positions from a 50,000-word vocabulary.
+
+**How that count is worked out:** ask each word to rank all four words by score,
+then count how many of those rankings are actually different. With one number:
+
+```
+       the ranks them: ['king', 'ruled', 'the', 'the']
+      king ranks them: ['the', 'the', 'ruled', 'king']
+     ruled ranks them: ['king', 'ruled', 'the', 'the']   <- same as an earlier row
+       the ranks them: ['the', 'the', 'ruled', 'king']   <- same as an earlier row
+
+   4 rankings, but only 2 are DIFFERENT
+```
+
+**Why two numbers escapes the trap.** With one number a query was just a sign.
+With two it has a *direction*, and there are many directions:
+
+```
+   queries:  the [-0.22, 1.94]   king [-0.01, -1.38]
+             ruled [0.45, -1.35]  the [0.04, 2.37]
+
+       the ranks them: ['ruled', 'the', 'the', 'king']
+      king ranks them: ['king', 'the', 'the', 'ruled']
+     ruled ranks them: ['the', 'king', 'the', 'ruled']
+       the ranks them: ['ruled', 'the', 'the', 'king']   <- same as an earlier row
+
+   4 rankings, 3 DIFFERENT
+```
+
+`king` and `ruled` both point roughly downward, but their first numbers differ
+(`-0.01` vs `0.45`) — enough to swap their top two choices. The duplicate that
+remains is `the` at positions 0 and 3, both pointing up (`1.94` and `2.37`):
+similar directions, same ranking.
+
+| numbers | what a query is | distinct rankings |
+| --- | --- | --- |
+| 1 | a sign | 2 |
+| 2 | a direction in a plane | 3 |
+| 4+ | a direction in more room | ~3.5 of a possible 4 |
+
+### How the weights start
+
+```
+        spread = 1 / sqrt(fan_in)
+        weight = rng.gauss(0, spread)      for every cell
+```
+
+Random, centred on zero. The model starts with no preferences whatsoever;
+training is what makes the numbers mean anything. Drawing 2000 of them:
+
+```
+        -0.40 to -0.15  #################################       403
+        -0.15 to  0.00  ##########################              322
+         0.00 to  0.15  #########################               300
+         0.15 to  0.40  ####################################    442
+```
+
+Two thirds land within `+/-0.354`, effectively all within three times that.
+
+The one real decision is the spread, and it matters. Measured against an input of
+typical size 1.53:
+
+```
+   spread 1.000 (too big)      ->  typical output size   4.79
+   spread 0.354 (1/sqrt(8))    ->  typical output size   1.69
+   spread 0.050 (too small)    ->  typical output size   0.24
+```
+
+Only `1/sqrt(fan_in)` keeps the output about the size of the input. Bigger and
+every layer amplifies; smaller and the signal fades.
+
+### Two mistakes worth keeping
+
+**A stand-in input hid a real problem.** The first draft used small invented
+numbers because they fitted the screen. On L3's actual embeddings the score gap
+reached 32, and softmax saturates past a gap of about 10 — so attention came out
+winner-take-all, `1.0000 / 0.0000`. The toy example made a broken configuration
+look healthy. Measured fixes:
+
+```
+  as written then                        score gap 32.56   0.118 0.000 0.000 0.882
+  + divide by sqrt(d_head)               score gap 16.28   0.267 0.000 0.001 0.732
+  + smaller init (std=1/sqrt(d_model))   score gap  7.20   0.008 0.947 0.008 0.038
+  both fixes together                    score gap  3.60   0.067 0.724 0.065 0.144
+```
+
+The `sqrt(d_head)` scaling everyone quotes was **not sufficient on its own** —
+the initialisation mattered more here.
+
+(Those figures were measured at `D_HEAD = 4`. At the current `D_HEAD = 8` the
+same run gives 29.8 unscaled and 10.5 scaled — see "This example does saturate"
+above.)
+
+**An invented number crept back in, at a smaller scale.** The "why not one
+number" demo built a throwaway `build_matrix(8, 1, seed=12)` to produce its
+"advertises" values — correct arithmetic on a made-up matrix, in a file that uses
+the real `W_K` everywhere else. It now takes `W_K`'s actual first column, so the
+hypothetical is honest: *what if the key matrix had only the one column it
+already has?*
+
+The knock-on was the giveaway. The section ended with a hardcoded "there is no
+way to say 'I want ruled'" — but with the real numbers `ruled` is the *minimum*,
+so it is reachable, and the stranded words are `the` and `king` instead. A
+sentence that contradicted its own printed numbers. It is now computed from the
+data rather than written down.
+
+**The rule that would have prevented both:** if a real value is available, use
+it. Never fabricate one for readability. The first invented input hid a
+saturation bug; the second produced a false sentence.
+
+**A one-seed test measures the seed.** `test_attention_is_not_saturated_at_
+initialisation` checked a single random start. It passed at `D_HEAD=4` and failed
+at `D_HEAD=8`, and that looked like evidence that wider heads saturate. Over 200
+seeds at each width:
+
+```
+D_HEAD=4:  score std 2.35   saturated in 34/200 runs
+D_HEAD=8:  score std 2.20   saturated in 30/200 runs
+```
+
+Identical. The `sqrt(d_head)` division does exactly its job, and the flip was
+luck. Both tests now average over 100 seeds and assert something about the
+distribution.
+
+### D_HEAD = D_MODEL, and a rule broken
+
+`D_HEAD` was set to 4 with a comment justifying it by L5's multi-head split. That
+violates the one-milestone-at-a-time rule — importing a later milestone's
+reasoning to justify a number here.
+
+The honest value for a single head is `D_HEAD = D_MODEL`: narrowing it throws
+information away for no gain, because there is nothing else to use the space.
+The comment now states the *condition* under which it changes ("this becomes a
+real choice when there is more than one head") without describing the later
+design.
+
+### What "head" and "layer" actually mean
+
+Both words get used constantly without being defined. Pointing at the things
+themselves:
+
+**A HEAD is one complete copy of the machinery** — its own `W_Q`, `W_K`, `W_V`
+(192 weights here) plus the five steps. In this example the head is exactly three
+things:
+
+```
+1. its weights - 192 numbers it owns and nothing else uses
+     W_Q  8 x 8   first row [0.455, 0.512, 0.023, -0.27] ...
+     W_K  8 x 8   first row [0.827, -0.234, 0.14, 0.052] ...
+     W_V  8 x 8   first row [0.033, 0.442, -0.329, 0.351] ...
+
+2. its opinion - one row of shares per position
+                  the      king     ruled       the
+      the    1.0000    0.0000    0.0000    0.0000
+     king    0.9991    0.0009    0.0000    0.0000
+    ruled    0.0229    0.9430    0.0340    0.0000
+      the    0.0000    0.0117    0.9881    0.0001
+
+3. its answer - 4 rows of 8 numbers, each a blend of the values above it
+```
+
+**What the head does NOT own: the input rows.** Those came from L3, and a second
+head would read exactly the same ones. That grid of shares *is* the head — one
+opinion per position, and only one. A second opinion needs a second head with its
+own 192 weights.
+
+**A LAYER is all the heads at one stage, run together and combined** — one round
+of every position gathering from the positions before it.
+
+With one head, the layer *is* that head and the combining step is nothing. With
+two heads it would be: run both on the same input rows, get two opinions and two
+answers, then join the answers back together. Same input, different weights, so
+genuinely different opinions:
+
+```
+    head 1 thinks the last position should look at:
+      the=0.000  king=0.012  ruled=0.988  the=0.000
+    head 2, same input, its own weights:
+      the=0.169  king=0.063  ruled=0.301  the=0.466
+```
+
+### Heads sit side by side; layers stack
+
+That is the whole distinction, and the consequences differ:
+
+```
+after LAYER 1: each row is itself + a blend of earlier rows
+after LAYER 2: the rows it blends ALREADY carry context, so
+               position 3 now draws on second-hand information too
+```
+
+- **More heads** — more simultaneous views of the *same* input.
+- **More layers** — indirect relationships, because layer 2 reads rows that layer
+  1 already filled with context, so a position can reach information it never
+  looked at directly.
+
+Counting weights the two ways:
+
+```
+    one head              192 weights
+    a layer of 2 heads    384 weights   (heads side by side)
+    6 such layers        2304 weights   (layers stacked)
+```
+
+This project is currently **1 head, 1 layer** — the smallest thing that works.
+
+One honesty note: a real transformer layer holds more than attention — a small
+feed-forward network, normalisation, and a residual add. Until those are
+assembled, "layer" here means the attention part only.
+
+### Did one head achieve anything?
+
+The test: run the same head on two sentences differing by **one earlier word**.
+
+```
+        A:  the king ruled the
+        B:  the queen ruled the      <- word 1 changed
+
+  Position 3 is 'the' in both. Its row going IN:
+        A  [  1.569,  -1.244,  -0.249,  -0.724, ...]
+        B  [  1.569,  -1.244,  -0.249,  -0.724, ...]
+        the same? True
+
+  Its row coming OUT of attention:
+        A  [ -0.288,   0.795,   2.393,  -1.723, ...]
+        B  [ -0.331,   0.648,   2.257,  -1.753, ...]
+        the same? False
+```
+
+Going in, position 3's row is **identical** in both — it is `"the"` at slot 3
+either way, and L3 gave it no way to know what preceded it. Coming out, the two
+differ.
+
+**That is what one attention head did: it turned isolated positions into
+context-aware ones.** The file opens with "every position is an island"; this is
+the bridge.
+
+And it is exactly what the task requires. To guess `kingdom` after
+`the king ruled the`, position 3 must know `king` and `ruled` came earlier.
+Before attention it could not; now it can.
+
+### Head width does not have to divide anything (yet)
+
+`(8 x 7)` works. So does `(8 x 3)` and `(8 x 12)`. The only hard requirement is
+that the matrix takes `D_MODEL` numbers in, because that is what a word row has.
+What comes out is a free choice.
+
+A constraint appears once heads are combined, because their outputs are stuck
+together and the total has to come back to `D_MODEL`:
+
+```
+   n_heads   d_head   total
+       1         8       1 x 8 = 8   ok
+       2         4       2 x 4 = 8   ok
+       4         2       4 x 2 = 8   ok
+       8         1       8 x 1 = 8   ok
+
+      ?          7       need 8/7 = 1.14 heads   not a whole number
+```
+
+`7` does not divide `8`, so no whole number of heads totals 8. The reason it has
+to total `D_MODEL` is that attention's output is added back onto the original
+word row a step later, and a 7-number row cannot be added to an 8-number row.
+
+Not about oddness or powers of two — just arithmetic. It is also why `D_MODEL` is
+usually chosen with divisors in mind: GPT-2's 768 gives `12 heads x 64`, and
+divides many other ways besides.
+
+### Shapes are architecture, not something fine-tuning changes
+
+| | what changes |
+| --- | --- |
+| **architecture** | the *shapes*: `D_MODEL`, `D_HEAD`, number of heads, number of layers |
+| **training / fine-tuning** | the *values* inside those shapes |
+
+Four separate knobs: `D_MODEL` is the width of the pipe running through the
+model, `D_HEAD` the width inside one head, heads sit beside each other, layers
+stack on top.
+
+Training and fine-tuning both adjust the 64 numbers in `W_Q`. Neither can make it
+56. Change `D_HEAD` from 8 to 7 and you have a **different model** — the old
+weights cannot be loaded, because there is nowhere for them to go. Same reason
+`vocab_size` was called painful to revisit at L1: anything that sets a shape is a
+commitment.
+
+Shapes are chosen once; then a great deal of compute is spent finding good values
+for them. Fine-tuning continues that search from someone else's values. It never
+reshapes anything.
+
+### The test that actually matters
+
+Rows summing to 1 and zeros above the diagonal are worth asserting, but neither
+would catch information leaking backwards through a subtler route. This one does:
+
+```python
+def test_changing_a_later_token_cannot_move_an_earlier_output():
+    before, _ = attention_plain(X, WQ, WK, WV)
+
+    tampered = [row[:] for row in X]
+    tampered[-1] = [9.9] * D_MODEL          # replace the LAST position entirely
+
+    after, _ = attention_plain(tampered, WQ, WK, WV)
+
+    for i in range(T - 1):
+        assert after[i] == pytest.approx(before[i])    # earlier outputs frozen
+    assert after[-1] != pytest.approx(before[-1])      # the last one SHOULD move
+```
+
+Replace the final position's input with garbage. Every **earlier** output must be
+identical, because none of them were allowed to look at it. The last output must
+change, because it was.
+
+This tests the property the mask exists for — *the future cannot influence the
+past* — rather than the mechanism that currently implements it. It would survive
+a rewrite from `-inf` to any other masking approach, and it fails loudly if a
+future refactor lets information flow the wrong way.
+
+Also worth asserting: **each output lies within the range of the values it
+averaged.** An average cannot land outside the things being averaged, so a
+violation means the weights are not really weights.
 
 ---
 
