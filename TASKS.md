@@ -184,9 +184,9 @@ Submit the code and terminal output for review before beginning R2. Be prepared 
 
 ### Tasks
 
-- [ ] Convert token batches to tensors.
-- [ ] Build token and positional embeddings.
-- [ ] Document shapes at every operation.
+- [x] Convert token batches to tensors.
+- [x] Build token and positional embeddings.
+- [x] Document shapes at every operation.
 - [ ] Implement one causal self-attention head from projections through output.
 - [ ] Verify that masked positions receive no attention probability.
 - [ ] Extend the implementation to multiple heads and an output projection.

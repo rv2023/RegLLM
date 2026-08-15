@@ -49,6 +49,7 @@ def build_mappings(vocabulary):
 TEXT       = read_text()
 TOKENS     = tokenize(TEXT)
 VOCABULARY = build_vocab(TOKENS)
+#print(VOCABULARY)
 VOCAB_SIZE = len(VOCABULARY)
 STOI, ITOS = build_mappings(VOCABULARY)
 

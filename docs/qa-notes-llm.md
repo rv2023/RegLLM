@@ -11,7 +11,7 @@ what is new about language models.
 
 Every number here was produced by running the project's own code.
 
-Covers L1–L2.
+Covers L1–L3.
 
 ---
 
@@ -314,7 +314,380 @@ offsets into the stream. That is what L9 will do.
 
 ---
 
-## Part 3 — Scalars before matrices
+## Part 3 — Embeddings, tensors, and autograd
+
+*L3.*
+
+### Why token IDs cannot be fed in directly
+
+`"the" = 12` and `"king" = 5`. Those numbers came from sorting the vocabulary
+alphabetically. They are **labels, not values**.
+
+A model does arithmetic. Give it `12` and it treats that as bigger than `5` —
+more than twice as big. Meaningless: `"the"` is not twice `"king"`. And `"the"=12`
+sits beside `"visited"=13` only because of the alphabet, not because the words are
+related.
+
+### The fix: one row of numbers per word
+
+Instead of one number per word, give each word a **list of numbers**, stored in a
+table with one row per word. With three numbers per word for legibility (the real
+thing uses eight):
+
+```
+  id  word          the 3 numbers for that word
+   0  a             [0.69, 0.52, -0.16]
+   5  king          [-0.5, 0.82, 0.97]
+  11  ruled         [0.61, 0.1, -0.97]
+  12  the           [0.44, -0.2, 0.65]
+  13  visited       [0.34, -1.0, -0.01]
+
+looking up a word is just indexing the table:
+  table[12] = [0.44, -0.2, 0.65]   (the)
+  table[5]  = [-0.5, 0.82, 0.97]   (king)
+```
+
+**That table is the embedding. That is all it is.** The lookup is list indexing —
+no clever operation. It is mathematically equivalent to multiplying a one-hot
+vector by a weight matrix, which is how textbooks introduce it and how nobody
+implements it: a matrix multiply that is thirteen multiplications by zero and one
+by one is a waste of a lookup.
+
+Two facts about those numbers:
+
+- **They start random** — the values above are literally `random.uniform(-1, 1)`.
+  Nothing in there knows what any word means yet.
+- **They are learned.** Gradient descent adjusts them exactly as it adjusted `m`
+  and `c`. `king` and `queen` drift toward similar rows because they occur in
+  similar places and the loss falls when they do. Nobody programs that in.
+
+### The position problem
+
+The first training example is `x = [12, 5, 11, 12]` — `the king ruled the`.
+
+`"the"` is at position 0 **and** position 3. Both look up `table[12]`. Both get
+`[0.44, -0.2, 0.65]` — bit-for-bit identical. The model has no way to tell the
+first word from the fourth.
+
+This matters because attention (L4) is **permutation-invariant**: shuffle the
+input and it computes the same thing. Without positional information,
+`the king ruled the` and `ruled the the king` are the same input.
+
+### The second table
+
+One row per **position**, not per word:
+
+```
+position 0 -> [-0.19, -0.60, -0.64]
+position 1 -> [-0.50,  0.52, -0.50]
+position 2 -> [-0.23,  0.37,  0.08]
+position 3 -> [ 0.88, -0.02, -0.16]
+```
+
+The two tables are indexed differently:
+
+| | rows | looked up by |
+| --- | --- | --- |
+| **word table** | 14 (one per vocabulary word) | the token ID — `12` for `"the"` |
+| **position table** | 4 (one per slot in the window) | where it sits — `0, 1, 2, 3` |
+
+**The position table does not care which word is there.** Position 0's row is
+always the same, whatever token occupies it. Every training example uses the same
+four position rows and different word rows.
+
+### Adding them
+
+For each position: look up the word's row, look up the position's row, add them
+number by number.
+
+```
+  position 0  word 'the'
+     word_table[12] = [0.44, -0.2, 0.65]
+     pos_table[0]   = [-0.19, -0.6, -0.64]
+     added          = [0.25, -0.8, 0.01]
+
+  position 3  word 'the'
+     word_table[12] = [0.44, -0.2, 0.65]     <- same row
+     pos_table[3]   = [0.88, -0.02, -0.16]
+     added          = [1.32, -0.22, 0.49]    <- different total
+```
+
+Same word, different totals. The tie is broken.
+
+The result — four rows of numbers — **is the model's actual input**. From L4
+onward the transformer never sees `"the"` or `12` again, only these vectors.
+
+### Why the position rows must be the same width
+
+Because they are **added**, and addition needs matching sizes. A 2-number position
+row and a 3-number word row leaves no third number to add to.
+
+So the width is not chosen independently. Pick one width — call it `d_model`, 8 in
+this project, 768 in GPT-2 — and every table uses it.
+
+### Why add rather than concatenate?
+
+Concatenation is the obvious alternative: stick them side by side, letting
+position use fewer numbers. It is a real design and some early models used it.
+
+Addition won because of what comes later. At **L6** the transformer block does:
+
+```
+x = x + Attention(x)
+```
+
+That `+` requires `Attention(x)` to be exactly as wide as `x`, so the width has to
+stay constant through the whole model. Concatenating at each stage would grow it
+without bound. Once the width is pinned, adding is free and keeps it pinned.
+
+### The part that should feel odd
+
+Two unrelated things — *which word* and *where it sits* — are added into the same
+numbers. That looks like it should scramble them irrecoverably.
+
+It does not, because there is room. With eight numbers there are many independent
+directions in that space, and the model learns to use some for word identity and
+others for position. They coexist rather than collide. With one or two numbers it
+genuinely would break; with 768 there is ample space.
+
+Worth being slightly suspicious of. It works better than it has any right to, and
+"just add them" is one of those choices justified mainly by the fact that it
+works.
+
+### Sizes
+
+```
+word table       14 rows x 8 numbers = 112 values
+position table    4 rows x 8 numbers =  32 values
+                                       ---
+                                       144 learnable numbers
+```
+
+Phase 1 had two parameters, both watched by hand. This has 144, and none of them
+will be set by hand.
+
+### Shapes
+
+```
+x tensor       (4,)      int64      <- IDs are indices, so integers
+token emb      (4, 8)
+pos emb        (4, 8)
+sum            (4, 8)
+```
+
+Four tokens in, four vectors of eight numbers out. **The sequence length is
+preserved through every step** — embeddings change *what* each position holds,
+never *how many* positions there are. That stays true all the way to L7.
+
+### Built twice, then checked
+
+Per the scalars-before-matrices rule, `embeddings.py` has three stages:
+
+1. **Plain Python** — `build_table`, `lookup`, `add_rows`, `embed_plain`. About
+   twenty lines, no PyTorch. `lookup` is a single line,
+   `[table[i] for i in indices]`, which is the entire embedding operation.
+2. **PyTorch** — `Embeddings(nn.Module)` holding two `nn.Embedding` tables.
+3. **The cross-check** — `load_plain_tables` copies the stage-1 lists into the
+   module's weights, so both hold identical numbers and any output difference
+   would be a logic difference.
+
+```
+stage 3: do the two agree?
+  max difference   1.19e-07
+  agree            True
+```
+
+That is the point of the milestone: `nn.Embedding` is a table and a lookup, and
+this is proof rather than a claim.
+
+### What `1.19e-07` means
+
+It is **float32 machine epsilon** — the smallest relative step float32 can
+represent, `2**-23 = 1.1920928955078125e-07`. The measured difference is exactly
+that, which is the giveaway.
+
+The two stages store numbers at different precision:
+
+- **Python floats are float64** — about 16 significant digits
+- **PyTorch defaults to float32** — about 7
+
+```
+a Python float (float64):  0.6888437030500962
+stored as float32       :  0.6888437271118164
+lost in the conversion  :  2.406e-08
+```
+
+Copying the list into `.weight.data` rounds every value to the nearest float32.
+Add two of them and the total can be off by about one epsilon. **Not an error and
+nothing to fix** — the same computation, held in containers of different
+precision.
+
+This is why the test uses a tolerance:
+
+```python
+assert torch.allclose(torch_out, plain_out, atol=1e-6)
+```
+
+`==` would fail. `1e-6` sits comfortably above `1.19e-07`, so real logic errors
+still fail while float32 rounding does not. Same rule as the finite-difference
+check in R3: **compare floats with a tolerance, chosen above the noise floor of
+the representation.**
+
+Where it stops being trivia:
+
+```
+  torch.float64     epsilon 2.220e-16    bytes 8
+  torch.float32     epsilon 1.192e-07    bytes 4
+  torch.float16     epsilon 9.766e-04    bytes 2
+  torch.bfloat16    epsilon 7.812e-03    bytes 2
+```
+
+At L12, moving to 16-bit halves memory and speeds up arithmetic — bfloat16's
+epsilon is about 65,000× coarser than float32's. Numbers agreeing to `1.19e-07`
+today would agree to two or three decimal places there. That is why mixed
+precision keeps gradient accumulation and optimizer state in float32 while
+running the bulk in 16-bit.
+
+bfloat16 and float16 are both 2 bytes but split the bits differently: bfloat16
+trades precision for range, keeping float32's exponent so it does not overflow.
+That is why it is preferred for training, where gradients span many orders of
+magnitude.
+
+### Why PyTorch at all, when stage 1 works?
+
+For L3 alone it is not needed. The reason is **autograd**.
+
+Phase 1 derived `dL/dm` and `dL/dc` by hand — two parameters. L3 has 144, and by
+L7 it is thousands, through attention and softmax and several layers. Deriving
+those by hand is not a matter of effort; it is not practical.
+
+PyTorch records every operation performed on a tensor and computes all gradients
+from one call:
+
+```
+loss = m(x).sum()
+loss.backward()          # <- one line, 144 gradients
+
+  token row   word        gradient sum
+     5        king           8.0   <- appeared once
+    11        ruled          8.0   <- appeared once
+    12        the           16.0   <- appeared twice (positions 0 and 3)
+   (all other rows)          0.0
+```
+
+**`the` got exactly twice the gradient**, because it appeared at two positions
+and its contributions accumulated. That is the multi-path chain rule from Phase 1
+happening automatically — the same rule worked out by hand for `dL/dm` summing
+over five data points. Words absent from the input get `0.0`; they contributed
+nothing, so they get no update.
+
+Secondary reasons: speed (tensor ops run in optimised C/BLAS), and the building
+blocks needed next — `nn.Linear` for Q/K/V at L4, `softmax` at L4 and L7,
+`cross_entropy` at L8.
+
+**Phase 1 was not wasted by this.** Autograd is exactly what was done by hand, so
+when gradients misbehave at L8 there are three tools available that most people
+lack: knowing gradients accumulate (hence `zero_grad`), knowing what a sign error
+looks like in a loss curve, and being able to run a finite-difference check on any
+single parameter to test whether autograd's answer is right.
+
+### block_size is a hard ceiling
+
+```
+dataset.IDS has 42 ids;  position table has 4 rows
+model(torch.tensor(IDS)) ->  IndexError: index out of range in self
+model(torch.tensor(IDS[:4])).shape = (4, 8)
+```
+
+`forward` computes `torch.arange(T)`, so 42 tokens asks for position rows 0–41.
+Rows 4–41 do not exist. The *word* table is fine — all 42 IDs are valid words. It
+is the position table that runs out.
+
+That number is the **context window**. Not a soft preference or a tuning knob:
+there is no row for position 5, so position 5 cannot be represented. It is the
+same figure quoted for real models — 1024 for GPT-2, 128k+ today. When a model
+"cannot handle a longer prompt", this is usually why, and extending it means new
+parameters that were never trained.
+
+**This is also why L2 windowed the data.** The corpus is 42 tokens and the model
+sees 4, so the stream is chopped into 38 overlapping windows of exactly
+`BLOCK_SIZE`. The two constants must agree — `dataset.BLOCK_SIZE` (how wide each
+example is) and `embeddings.BLOCK_SIZE` (how many position rows exist). Defined
+separately they could silently drift; one should import from the other.
+
+### Shape is part of a tensor's identity
+
+```
+a = [[1.0, 2.0]]      shape (1, 2)    one row,  two columns
+b = [[1.0], [2.0]]    shape (2, 1)    two rows, one column
+same numbers? yes.   same tensor? False
+
+a @ b  ->  (1, 1)  =  [[5.0]]                    the dot product
+b @ a  ->  (2, 2)  =  [[1.0, 2.0], [2.0, 4.0]]   the outer product
+```
+
+Same two vectors; swapping the order gives a single number or a 2x2 matrix.
+**Matrix multiplication is not commutative** — order changes the result and the
+shape.
+
+The rule:
+
+```
+(n, k) @ (k, m)  ->  (n, m)
+     ^     ^
+     these must match, and they disappear
+```
+
+Both orders are legal, which is why getting it backwards does not crash. It
+silently produces the wrong shape and surfaces several layers later.
+
+Why it matters at L4:
+
+```
+Q     (4, 8)      one row per position
+K.T   (8, 4)      transposed
+      ------
+      (4, 4)      one score for every PAIR of positions
+```
+
+That `(4, 4)` is the attention matrix — row `i`, column `j` is "how much should
+position `i` attend to position `j`", and it is what the causal mask applies to.
+Compute `K.T @ Q` instead and you get `(8, 8)`: a valid matrix of complete
+nonsense relating embedding dimensions to each other rather than positions.
+
+This is why Codex.md insists on predicting shapes by hand before writing
+attention.
+
+### The batch dimension: [B, T, C]
+
+```
+input   (3, 4)      3 sequences  x  4 tokens each
+output  (3, 4, 8)   3 sequences  x  4 positions  x  8 numbers each
+```
+
+The embedding added a dimension — each ID became 8 numbers — and left the others
+alone. Nothing new happens: `m(batch[0])` gives `(4, 8)`, exactly matching
+`out[0]`. The batch dimension is several independent copies of the same
+computation, stacked.
+
+The standard naming, used everywhere from here to L11:
+
+- **B** — batch: how many sequences
+- **T** — time: how many positions in each
+- **C** — channels: how many numbers per position, i.e. `d_model`
+
+Position rows are **shared across the batch**. Subtracting the word row from
+`out[i, 0]` gives the same position-0 row in every sequence, because position 0
+means "first slot" regardless of the sentence. `torch.arange` does not look at
+the tokens, so broadcasting copies the same rows across the batch for free.
+
+Why batch at all: the R8 answer. One update from several examples instead of one
+each, with the sequences processed in parallel. At L9 the same trade-off returns
+— bigger batches give less noisy gradients but fewer updates per pass.
+
+---
+
+## Part 4 — Scalars before matrices
 
 The working rule for this phase: **build every component explicitly first, then
 convert it to tensors.** Plain Python numbers and loops, on a hand-sized example,
@@ -354,7 +727,7 @@ implementation you read will use. It is just not the starting point.
 
 ---
 
-## Part 4 — Why Phase 1 had no softmax or temperature
+## Part 5 — Why Phase 1 had no softmax or temperature
 
 Neither is missing by oversight — there was nothing for them to act on.
 
