@@ -500,6 +500,337 @@ on its own penalty says nothing about how well it predicts.
 
 ---
 
+## Part 6 — Batching and SGD
+
+*R8 — concepts worked through before implementation. Numbers below come from
+running the R6 training set with a batched loop.*
+
+### What is SGD?
+
+**Stochastic Gradient Descent.** *Stochastic* means random, and the randomness
+is in **which data you look at** before each step.
+
+Everything up to R7 was **not** stochastic: every update used all 40 training
+points, in the same order, every time. That is **full-batch gradient descent**.
+
+SGD replaces "use all the data" with "use a randomly chosen piece of it".
+Shuffle, take a slice, compute the gradient from just that slice, step. The
+gradient becomes an *estimate* of the true gradient — a noisy one, drawn at
+random. The update rule itself is unchanged:
+
+$$m \leftarrow m - \eta \frac{\partial L}{\partial m}$$
+
+Only the data behind `∂L/∂m` changed.
+
+| name | points per update | gradient |
+| --- | --- | --- |
+| **full-batch** (batch GD) | all 40 | exact |
+| **mini-batch** | 8 | noisy estimate |
+| **SGD** (strict sense) | 1 | very noisy estimate |
+
+### The terminology trap
+
+"SGD" is used two ways:
+
+- **Strictly** — batch size 1, one sample per update. The sense used in the table
+  above, to keep it distinct from mini-batch.
+- **In practice** — any mini-batch training, whatever the size. "Trained with
+  SGD, batch size 256" is not a contradiction; it is the common usage.
+
+`torch.optim.SGD` follows the loose sense. It neither knows nor cares about batch
+size — it is just the plain update rule `param -= lr * grad`, as opposed to Adam
+or RMSprop. So **SGD names the optimizer**, and separately describes estimating
+gradients from random subsets. Batch size 1 is the extreme case, not the
+definition.
+
+### Why mini-batch beats full-batch per epoch
+
+`lr=0.01`, 200 epochs each — equal passes over the data:
+
+```
+mode         batch  updates          m        c  train MSE  test MSE
+full-batch      40      200     3.4538   3.7774     3.7780    4.5414
+mini-batch       8     1000     3.0751   6.1869     2.4802    1.6792
+mini-batch       6     1400     3.0345   6.2602     2.5242    1.6228
+SGD              1     8000     2.5854   6.2440    10.5731   11.5070
+```
+
+Full-batch spends every point on one very accurate gradient and takes one step.
+200 epochs buys 200 updates, and `m=3.4538, c=3.7774` is nowhere near converged.
+Mini-batch-8 saw **exactly the same data** and reached `3.0751, 6.1869` —
+essentially the R6 answer — because those same passes bought it 1,000 updates.
+
+**A less accurate gradient computed five times beats an exact gradient computed
+once.** That is the whole argument for mini-batching, and why every large model
+is trained this way. At L9 the full-batch option will not exist — the dataset
+will not fit in memory.
+
+### Why SGD is worse despite 8,000 updates
+
+More updates is not better if each is based on a bad estimate.
+
+```
+FULL-BATCH gradient at the minimum:  dm= -0.0017  dc= -0.0003   <- essentially zero
+
+SINGLE-POINT gradients at the SAME parameters:
+   point 0: x= 1.30  dm=   4.5528
+   point 1: x= 9.68  dm=  11.0552
+   point 4: x= 6.70  dm=  -3.7889
+   point 5: x= 4.76  dm= -13.0250
+
+   across all 40 points: dm ranges  -37.307 to   48.656, mean -0.0017
+   one SGD step at lr=0.01 moves m by up to 0.4866
+```
+
+**At the minimum the full-batch gradient is zero. The individual point gradients
+are not.** They span `-37` to `+49` and cancel only *on average* — their mean is
+the full-batch gradient. SGD never sees the mean; it steps on one point at a
+time. Point 1 says "increase `m`", point 5 says "decrease `m`, hard". Both are
+right about their own point and wrong about the dataset.
+
+This breaks the self-slowing seen in R4, where shrinking gradients
+(`-108 → -82 → -62`) made steps smaller automatically near the minimum.
+Single-point gradients **do not shrink** as the minimum is approached — no
+individual point is ever predicted perfectly, because of the noise — so the steps
+stay large forever. At `lr=0.01` each step moves `m` by up to `0.4866` against a
+true value of `3.07`.
+
+SGD therefore arrives in the neighbourhood and orbits. Update 8,000 is as
+unsettled as update 800. Train MSE of `10.57` does not mean the parameters were
+wrong on average; it means they were never anywhere in particular when training
+stopped.
+
+### Batch size and learning rate are coupled
+
+Averaging `k` samples cuts the noise in the estimate by roughly `√k`. Eight
+points reduce the wobble about 2.8×; forty about 6.3×.
+
+| batch | gradient quality | updates per epoch |
+| --- | --- | --- |
+| 1 | terrible | 40 |
+| 8 | decent | 5 |
+| 40 | exact | 1 |
+
+So halving the batch generally means reducing the learning rate too. A step size
+that is fine averaged over 40 points is far too large applied to one.
+
+Two fixes:
+
+- **Lower the learning rate.** `lr=0.001` makes SGD stable on this data.
+- **Decay the learning rate over time.** Big noisy steps early to cover ground,
+  then shrink them so the noise cannot throw you around once you have arrived.
+  This is the real answer, and precisely why **learning-rate schedules** exist —
+  the warmup-and-decay added at L9. SGD without a schedule does not converge; it
+  orbits.
+
+That is also why R8 precedes R9: Momentum, RMSprop and Adam are all, in part,
+machinery for coping with noisy mini-batch gradients.
+
+### Batch size and epochs are independent knobs
+
+A frequent tangle. They set different things:
+
+- **`batch_size`** — how much data goes into *one* update. Controls gradient
+  quality.
+- **`epochs`** — how many times the whole dataset is swept. Controls how long
+  training lasts.
+
+Batch size says nothing about how long you train. What it *does* determine is
+**batches per epoch**, and that is the mechanism behind mini-batch extracting
+more updates from the same data:
+
+```
+batches per epoch = ceil(n / batch_size)
+total updates     = batches per epoch × epochs
+```
+
+For `n = 40`:
+
+| batch_size | batches per epoch | updates at 200 epochs | points processed |
+| --- | --- | --- | --- |
+| 40 | 1 | 200 | 8,000 |
+| 8 | 5 | 1,000 | 8,000 |
+| 6 | 7 (six of 6, one of 4) | 1,400 | 8,000 |
+| 5 | 8 | 1,600 | 8,000 |
+| 1 | 40 | 8,000 | 8,000 |
+
+**The last column is identical for all rows** — that is what "equal epochs"
+means. `40 × 200 = 8,000` points touched, whatever the batch size. What differs
+is how many updates each run extracts from that same data. (`8,000` appearing
+twice in the last row is a coincidence of batch size 1, where points and updates
+coincide.)
+
+Note `batch_size = 6` gives **7** batches, not 6.67 — six full batches plus a
+short one of 4.
+
+### What updates when
+
+**Per batch** (five times per epoch at `batch_size=8`): `m`, `c`, the update
+counter.
+
+**Per epoch** (once): the shuffle order, and one loss measurement over the
+**full** training set.
+
+**Never:** the data. Only the order it is visited in changes.
+
+So "per epoch" does not describe when parameters move — they move once per
+batch. It describes the bookkeeping around them.
+
+```
+--- epoch 0 --- (order reshuffled)
+   batch 0  (8 pts)  dm=-293.439  ->  m= 2.9344  c= 0.4560
+   batch 1  (8 pts)  dm= -73.947  ->  m= 3.6739  c= 0.5879
+   batch 2  (8 pts)  dm= -21.146  ->  m= 3.8853  c= 0.6325
+   batch 3  (8 pts)  dm= -20.115  ->  m= 4.0865  c= 0.6995
+   batch 4  (8 pts)  dm=  11.681  ->  m= 3.9697  c= 0.7002
+   end of epoch: train MSE over ALL 40 points = 9.0557
+--- epoch 1 --- (order reshuffled)
+   ...
+   end of epoch: train MSE over ALL 40 points = 11.2967
+```
+
+The gradients **disagree with each other**: `-293, -74, -21, -20, +11.7`. Batch 4
+wants to move `m` in the opposite direction from batches 0–3. Neither is wrong —
+they are different subsets, each honestly reporting what its own points want.
+Full-batch averaged all of that into one number before stepping.
+
+Record the epoch's loss on the **full** training set, not on the last batch and
+not as an average of batch losses. Batch losses are computed on different subsets
+at different parameter values, so averaging them mixes several things together.
+
+### Loss can go up between epochs
+
+Epoch 0 ends at `9.0557`, epoch 1 at `11.2967` — worse, despite five more
+updates. **This is not a bug.**
+
+With full-batch at a sane learning rate, loss decreased monotonically, so any
+increase meant something was broken. That rule does not survive batching: each
+step improves *its own batch* while possibly worsening the full-set average. The
+curve trends down over many epochs while wobbling locally.
+
+The diagnostic therefore changes from "did loss go up?" to "is the trend
+descending over tens of epochs?" — the same judgement needed when reading a noisy
+training curve at L9.
+
+### R6 and R7 in this vocabulary
+
+Those milestones had no batching concept at all — no `batch_size`, no shuffling,
+no inner loop. Every iteration predicted all 40 points, computed one loss and one
+gradient pair from all 40, and applied one update.
+
+| R6 / R7 | R8 equivalent |
+| --- | --- |
+| `ITERATIONS = 20000` | `EPOCHS = 20000`, `batch_size = 40` |
+| 20,000 iterations | 20,000 epochs, 1 batch each |
+| 20,000 updates | 20,000 updates |
+
+So `batch_size = 40` must reproduce R6/R7 exactly at the same epoch count — the
+checkpoint that proves a batching loop is correct before trying anything
+interesting.
+
+**R6 and R7 never shuffled**, and did not need to: with one batch containing
+everything, order cannot change a mean over 40 numbers. Shuffling only starts to
+matter once the data is split, because then order decides *which points share a
+batch*. That is why `rng.permutation` appears in R8 and nowhere earlier.
+
+R8 adds exactly two things: an inner loop over batch slices, and a per-epoch
+shuffle. `predict`, `mse`, `gradients` and `update_parameters` are unchanged.
+
+### Choosing the epoch budget
+
+Cost is not the constraint — the full sweep at 20,000 epochs takes about 15
+seconds (`0.3s` for full-batch, `~10.6s` for SGD).
+
+The argument against a large budget is that it makes the comparison **boring**.
+At 20,000 epochs full-batch gets 20,000 updates and converges to `m=3.0707`,
+mini-batch gets 100,000 and converges to the same place, and the final-value
+table shows three identical rows. The difference between batch sizes lives
+entirely in *how fast they arrived*.
+
+Running the sweep at two budgets costs seconds and shows both facts:
+
+- **Short budget** (e.g. 200 epochs) — endpoints differ; mini-batch is ahead on
+  equal data.
+- **Long budget** (e.g. 20,000) — see below. The result is not what you would
+  guess.
+
+### Only full-batch actually converges
+
+Measured, 20,000 epochs:
+
+```
+mode        batch  updates           m         c   train MSE  test MSE
+full-batch     40    20000      3.0707    6.2686      2.4766    1.6489
+mini-batch      8   100000      2.9579    6.2479      2.9323    1.9855
+mini-batch      6   140000      2.9518    6.2454      2.9841    2.0407
+SGD             1   800000      2.6882    6.3497      7.1148    7.0862
+```
+
+Mini-batch-8 ends **worse** than full-batch, and worse than its own 200-epoch
+result (`2.4802`). Training five times longer made it slightly worse.
+
+The reason is the one from "Why SGD is worse despite 8,000 updates", applied at
+every batch size below full: **at the minimum the full-batch gradient is zero,
+but a batch gradient is not.** So full-batch's steps shrink to nothing and it
+settles; every smaller batch keeps taking finite steps forever and orbits. Batch
+8's orbit is roughly `√8 ≈ 2.8×` tighter than SGD's — smaller, not absent.
+
+Running longer does not shrink the orbit. It just returns a different random
+point on it.
+
+So the accurate summary is **not** "mini-batch is faster to the same answer". It
+is:
+
+- mini-batch reaches the neighbourhood far faster, and never settles
+- full-batch is much slower, and does settle
+- **learning-rate decay is what closes the gap** — shrinking `η` shrinks the
+  orbit, which is why schedules are not optional for batched training
+
+Counted per update rather than per epoch, all four runs trace nearly the same
+path, with full-batch as the smooth lower envelope and the smaller batches
+wobbling around it. Per update, noise buys nothing.
+
+### Regularization interacts with batch size only through speed
+
+The penalty gradient (`2λm` or `λ·sign(m)`) is applied on **every update**, so
+smaller batches apply it far more often — 8,000 times versus 200 at these
+settings. That does not make the penalty stronger.
+
+The equilibrium sits where the data gradient and the penalty gradient cancel,
+and that balance point does not depend on how often you step. Measured shrinkage
+in `m` from adding L2 `λ=0.1` over 200 epochs:
+
+| batch | without penalty | with L2 λ=0.1 | shrinkage |
+| --- | --- | --- | --- |
+| 40 | 3.4538 | 3.4214 | −0.0324 |
+| 8 | 3.0751 | 3.0298 | −0.0453 |
+| 6 | 3.0345 | 2.9914 | −0.0431 |
+| 1 | 2.5854 | 2.5508 | −0.0346 |
+
+Comparable across a 40× range of update counts — not scaled by it. Batch size
+changes how fast the equilibrium is reached, not where it is.
+
+### Compare by epoch, not by update
+
+Full-batch at 200 updates and SGD at 200 updates are not comparable — SGD has
+seen 200 points and full-batch has seen 8,000. **Equal epochs means equal data
+seen**, which is the fair comparison and the one the tables above use.
+
+Both framings are legitimate and they rank the methods **oppositely**:
+
+- **Per epoch** (equal data): mini-batch wins decisively.
+- **Per update** (equal steps): full-batch wins, since each of its steps uses an
+  exact gradient.
+
+The ML convention is to count epochs because **data is the expensive resource** —
+reading and processing points costs time, while the parameter update itself is
+trivial. Mini-batch wins on the axis that reflects real cost.
+
+Whichever is used, say which one the table is holding constant, since the ranking
+depends on the answer.
+
+---
+
 ## Part 7 — Modules, imports, and `__main__`
 
 ### Importing a module runs it
