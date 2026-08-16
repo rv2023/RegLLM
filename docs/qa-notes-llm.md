@@ -1763,35 +1763,35 @@ on a GPU, arrive without rewriting anything.
 
 ### What one head cannot do
 
-A head's weights **sum to 1**. Attention is a zero-sum allocation — one unit to
-hand out per position, total.
-
-Suppose predicting the next word needs both *who acted* (`king`) and *what they
-did* (`ruled`). A single head has to choose:
+On our own numbers. Take head 0 and look at how position 3's answer is built:
 
 ```
-        0.90 on king and 0.90 on ruled   ->  impossible, that is 1.8
-        0.50 on king and 0.50 on ruled   ->  the best it can manage
+   weights:  the=0.369  king=0.045  ruled=0.057  the=0.529
+
+   out[0] = 0.369*-0.045 + 0.045* 1.331 + 0.057*-1.054 + 0.529*-1.146 =  -0.622
+   out[1] = 0.369*-0.467 + 0.045*-0.606 + 0.057*-0.008 + 0.529* 0.065 =  -0.166
+   out[2] = 0.369*-1.759 + 0.045* 0.805 + 0.057* 0.002 + 0.529*-0.790 =  -1.031
+   out[3] = 0.369* 0.866 + 0.045* 0.840 + 0.057*-1.592 + 0.529*-0.668 =  -0.085
 ```
 
-So it compromises, and both signals arrive at half strength:
+**The same four weights appear in every line.** A head's weights do not depend on
+which output number is being produced, so all of them attend to exactly the same
+places. One head means one opinion, applied to everything it outputs.
+
+Now the two heads together, same position:
 
 ```
-        one head, forced to split:  [0.5, 0.5]   both diluted
+   out[0..3] used  0.369  0.045  0.057  0.529
+   out[4..7] used  0.088  0.405  0.262  0.245
 ```
 
-Two heads have **two independent units**:
+The first half leans on `the`; the second half leans on `king`. **Different parts
+of the same answer looked at different words** — and that is precisely what a
+single head cannot do, however wide you make it.
 
-```
-        head 0, 0.9 on king:        [0.9, 0.1]
-        head 1, 0.9 on ruled:       [0.1, 0.9]
-```
+`W_O` then mixes those halves so a later layer sees one answer carrying both.
 
-Both relationships followed at full strength, side by side, with `W_O` deciding
-how much of each the answer carries.
-
-**That is the reason for more than one head** — not more capacity, but more than
-one place to spend a fixed budget of attention.
+**More heads is not more capacity — it is more than one place to look at once.**
 
 ### Extra heads are free
 
