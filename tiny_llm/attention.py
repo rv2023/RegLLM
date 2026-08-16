@@ -140,6 +140,23 @@ if __name__ == "__main__":
     print("WHAT CAME OUT")
     print("=" * 74)
     print()
+
+    def wide_grid(name, rows):
+        """Q/K/V are (T x D_HEAD). The columns are the numbers INSIDE one
+        query/key/value, not positions - labelling them with words would be
+        wrong, and is an easy mistake to make."""
+        print(f"        {name:<7}" + "".join(f"{'c' + str(d):>7}" for d in range(D_HEAD)))
+        for i in range(T):
+            print(f"      {words[i]:>9}" + "".join(f"{v:7.2f}" for v in rows[i]))
+        print()
+
+    print(f"  Q, K and V - what each word turned into. Each row is one word,")
+    print(f"  each column one of the {D_HEAD} numbers inside a query, key or value:")
+    print()
+    wide_grid("Q", parts["queries"].tolist())
+    wide_grid("K", parts["keys"].tolist())
+    wide_grid("V", parts["values"].tolist())
+
     print("  scores, after masking:")
     print()
     grid(parts["scores"].tolist(), words)
@@ -148,10 +165,27 @@ if __name__ == "__main__":
     print()
     grid(parts["weights"].tolist(), words)
     print()
-    print("  the answer:")
+    print("  the answer - each row is that position's shares applied to V:")
     print()
     for i in range(T):
         print(f"        {words[i]:>7}  {show(out[i].tolist())}")
+    print()
+    print("  Careful here: the answer is NOT V. It is weights @ V, so each row")
+    print("  is a blend of V's rows. This seed's weights are close to one-hot,")
+    print("  which makes most answer rows look like a COPY of some other word's")
+    print("  V row:")
+    print()
+    for i in range(T):
+        picked = int(parts["weights"][i].argmax())
+        share = float(parts["weights"][i][picked])
+        note = ("its own V row, since position 0 sees only itself"
+                if i == 0 else
+                f"{share:.1%} of it is the V row of {words[picked]!r}")
+        print(f"        {words[i]:>7}  {note}")
+    print()
+    print("  Only position 0 equals its own V row. That near-copying is the")
+    print("  saturation this seed has - real training moves the weights away")
+    print("  from one-hot, and L5 shows several heads spreading them further.")
     print()
 
     print("=" * 74)

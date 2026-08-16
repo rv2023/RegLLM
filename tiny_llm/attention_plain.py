@@ -117,6 +117,31 @@ def scores_for(queries, keys, scale=True):
     return [[dot(q, k) / divisor for k in keys] for q in queries]
 
 
+def softmax_breakdown(scores):
+    """The two intermediate quantities behind one row of softmax.
+
+    exp(-inf) is 0, so a masked cell contributes nothing to the total and
+    ends up with exactly no share. Returns (exponentiated, total).
+    """
+    exponentiated = [0.0 if v == float("-inf") else math.exp(v) for v in scores]
+    return exponentiated, sum(exponentiated)
+
+
+def print_exp_table(scores, exponentiated, total, labels, indent="          "):
+    """Score -> exp, one line per position, with the running total."""
+    for j, value in enumerate(scores):
+        label = "-inf" if value == float("-inf") else f"{value:8.4f}"
+        print(f"{indent}{label:>8}   ->  {exponentiated[j]:9.4f}    ({labels[j]})")
+    print(f"{indent}{'':8}       {'-' * 9}")
+    print(f"{indent}total          {total:9.4f}")
+
+
+def print_share_table(exponentiated, total, labels, indent="          "):
+    """exp -> share, one line per position."""
+    for j, value in enumerate(exponentiated):
+        print(f"{indent}{value:9.4f} / {total:.4f}  =  {value / total:.4f}    ({labels[j]})")
+
+
 def apply_causal_mask(scores):
     """Blank out anything later than the current position.
 
@@ -543,6 +568,23 @@ if __name__ == "__main__":
     print(f"  value = {3 * D_HEAD} per word, x {T} words = {3 * D_HEAD * T} dot products, using the")
     print(f"  {3 * D_MODEL * D_HEAD} weights in the three matrices.")
     print()
+    print(f"  Here are all three, finished. Each row is one word, each column")
+    print(f"  one of the {D_HEAD} numbers inside a query, key or value - the columns")
+    print("  are NOT positions:")
+    print()
+
+    def wide_grid(name, rows):
+        print(f"        {name:<7}" + "".join(f"{'c' + str(d):>7}" for d in range(D_HEAD)))
+        for i in range(T):
+            print(f"      {words[i]:>9}" + "".join(f"{v:7.2f}" for v in rows[i]))
+        print()
+
+    wide_grid("Q", parts["queries"])
+    wide_grid("K", parts["keys"])
+    wide_grid("V", parts["values"])
+    print("  Steps 2 to 4 use Q and K to decide who looks at whom. V is not")
+    print("  touched until step 5, where those decisions get applied to it.")
+    print()
 
     print("=" * 74)
     print("STEP 2 - HOW WELL DOES EACH QUESTION MATCH EACH ADVERTISEMENT?")
@@ -619,20 +661,12 @@ if __name__ == "__main__":
     print("  STEP ONE - raise 2.718 to the power of each score. That is what")
     print("  exp() does. The answer is always positive, and it grows fast:")
     print()
-    exponentiated = []
-    for j, value in enumerate(example_row):
-        result = 0.0 if value == float("-inf") else math.exp(value)
-        exponentiated.append(result)
-        label = "-inf" if value == float("-inf") else f"{value:8.4f}"
-        print(f"          {label:>8}   ->  {result:9.4f}    ({words[j]})")
-    total = sum(exponentiated)
-    print(f"          {'':8}       {'-' * 9}")
-    print(f"          total          {total:9.4f}")
+    exponentiated, total = softmax_breakdown(example_row)
+    print_exp_table(example_row, exponentiated, total, words)
     print()
     print("  STEP TWO - divide each one by that total, so they add up to 1:")
     print()
-    for j, value in enumerate(exponentiated):
-        print(f"          {value:9.4f} / {total:.4f}  =  {value / total:.4f}    ({words[j]})")
+    print_share_table(exponentiated, total, words)
     print()
     print("  Those four numbers are row 2 of the grid below. Every row is made")
     print("  the same way:")

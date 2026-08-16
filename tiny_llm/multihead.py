@@ -1,5 +1,42 @@
 """L5 - several attention heads side by side, plus an output projection.
 
+Picks up directly from L4. Run this file and the argument runs in order:
+
+    THE PROBLEM        L4's own head - one head, d_head = 8, the same
+                       W_Q/W_K/W_V attention.py uses - walked forward from
+                       position 0 until the limitation shows
+    SEVERAL HEADS      the same position, split into two heads
+    NARROWER           why the split forces d_head down
+    OUTPUT PROJECTION  why concatenating is not enough on its own
+    STAGES 2 AND 3     the fused version, and the check that they agree
+
+WHAT ONE HEAD CANNOT DO. A head's weights do not depend on which output number
+is being produced, so every output number attends to exactly the same places.
+Print any position's out[0..7] and the same weights sit on the left of every
+line. One head has one opinion and applies it to everything it produces, and
+widening it does not help - a wider head still has one row of weights per
+position. Several heads let different parts of the same answer look at
+different words.
+
+WHY d_head SHRINKS. A word row is d_model numbers, and the answer this layer
+hands back has to be usable wherever the input was - fed to another layer, or
+combined with the original row. So it has to come back out as d_model numbers.
+Since the heads' answers are concatenated, that pins their total:
+
+    n_heads x d_head = d_model          2 x 4 = 8
+
+Keep each head at the full d_model and two heads give 16 numbers per word. The
+layer received 8 and handed back 16, and feeding that to another such layer
+fails: "mat1 and mat2 shapes cannot be multiplied (4x16 and 8x8)". With one head
+there was nothing to share the width with, so it kept all of it.
+
+WHY THERE IS AN OUTPUT PROJECTION. Concatenating alone leaves the heads sitting
+next to each other, never mixed: the first d_head numbers of the joined row came
+only from head 0, the rest only from head 1. W_O is a (d_model x d_model) matrix
+that makes every output number a blend of every head. Without it the heads never
+speak to each other. The __main__ output prints the actual row - numbers are not
+repeated here, because a docstring cannot keep them true.
+
 A NOTE ON THE SCALARS-BEFORE-MATRICES RULE. Earlier milestones built everything
 twice: plain Python loops first, then tensors, then a check that the two agree.
 This file keeps the two-stage discipline but BOTH stages are tensors, because
@@ -19,33 +56,10 @@ that. So "explicit" here means a LIST of heads rather than a return to loops:
               implementations do
     stage 3   check the two agree
 
-WHY MORE THAN ONE HEAD. A head's weights do not depend on which output number is
-being produced, so every output number attends to exactly the same places. One
-head has one opinion and applies it to everything it produces, and widening it
-does not help - a wider head still has one row of weights per position. Several
-heads let different parts of the same answer look at different words.
-
-WHY d_head SHRINKS. A word row is d_model numbers, and the answer this layer
-hands back has to be usable wherever the input was - fed to another layer, or
-combined with the original row. So it has to come back out as d_model numbers.
-Since the heads' answers are concatenated, that pins their total:
-
-    n_heads x d_head = d_model          2 x 4 = 8
-
-Keep each head at the full d_model and two heads give 16 numbers per word. The
-layer received 8 and handed back 16, and feeding that to another such layer
-fails: "mat1 and mat2 shapes cannot be multiplied (4x16 and 8x8)". With one head
-there was nothing to share the width with, so it kept all of it.
-
-WHY THERE IS AN OUTPUT PROJECTION. Concatenating alone leaves the heads sitting
-next to each other, never mixed:
-
-    [0.02, -0.152, -0.287, -0.444, | -0.315, 0.09, 0.057, -0.27]
-     <-------- head 1 -----------> | <-------- head 2 ------->
-
-Numbers 0-3 came only from head 1, numbers 4-7 only from head 2. W_O is an
-(d_model x d_model) matrix that makes every output number a blend of every head.
-Without it the heads never speak to each other.
+NOTE ON NUMBERS. The L4 head recapped at the top uses L4's build_matrix weights,
+so it reproduces attention.py exactly. The MultiHead modules below initialise
+their own weights and are d_model/n_heads wide, so their numbers are NOT L4's -
+the structure is what carries over, not the values.
 """
 
 import math
@@ -53,8 +67,8 @@ import math
 import torch
 from torch import nn
 
-from attention import CausalSelfAttention
-from attention_plain import SEED, T, example_input
+from attention import CausalSelfAttention, load_plain_matrices
+from attention_plain import D_HEAD, SEED, T, build_matrix, example_input
 from embeddings import D_MODEL
 
 N_HEADS = 2                     # 2 x 4 = 8 = D_MODEL
@@ -201,49 +215,93 @@ if __name__ == "__main__":
     print("THE PROBLEM - WHAT ONE HEAD CANNOT DO")
     print("=" * 74)
     print()
-    print("  L4 built one attention head and it worked: every position ended up")
-    print("  holding a blend of what came before it. So why add more?")
+    print("  Start with exactly what L4 left us: ONE head, d_head = 8, the same")
+    print("  W_Q, W_K, W_V that attention.py runs. Nothing new here at all.")
     print()
-    print("  Look at how one head builds position 3's answer. These are our own")
-    print("  numbers, from head 0:")
+    l4 = load_plain_matrices(
+        CausalSelfAttention(),
+        build_matrix(D_MODEL, D_HEAD, SEED + 1),
+        build_matrix(D_MODEL, D_HEAD, SEED + 2),
+        build_matrix(D_MODEL, D_HEAD, SEED + 3),
+    )
+    _, l4_parts = l4(x)
+    l4_values = l4_parts["values"].detach()
+    l4_weights = l4_parts["weights"].detach()
+
+    def wide_grid(name, rows):
+        print(f"        {name:<7}" + "".join(f"{'c' + str(d):>7}" for d in range(D_HEAD)))
+        for j in range(T):
+            print(f"      {words[j]:>9}" + "".join(f"{v:7.2f}" for v in rows[j]))
+        print()
+
+    print(f"  Its Q, K and V for our four words - {T} positions, {D_HEAD} numbers each:")
     print()
-    head_zero = explicit_parts["heads"][0]
-    row_weights = head_zero["weights"][3]
-    head_values = head_zero["values"]
-    print(f"        weights:  " + "  ".join(f"{words[j]}={row_weights[j]:.3f}" for j in range(T)))
+    wide_grid("Q", l4_parts["queries"].detach().tolist())
+    wide_grid("K", l4_parts["keys"].detach().tolist())
+    wide_grid("V", l4_values.tolist())
+
+    print("  A query is what a position is looking for, a key is what it offers,")
+    print("  a value is what it hands over if chosen.")
     print()
-    for d in range(d_head):
-        terms = " + ".join(
-            f"{row_weights[j]:.3f}*{head_values[j][d]:6.3f}" for j in range(T)
-        )
-        answer = sum(row_weights[j] * head_values[j][d] for j in range(T))
-        print(f"        out[{d}] = {terms} = {answer:7.3f}")
+    print("  These are the same three grids attention.py prints.")
     print()
-    print("  The same four weights appear in every single line.")
+    print("  Steps 2 to 5 turn them into three more. All of them are L4's, and")
+    print("  attention_plain.py works every one out number by number:")
     print()
-    print("  That is the limitation. A head's weights do not depend on which")
-    print("  output number is being produced, so EVERY output number attends to")
-    print("  exactly the same places. One head has one opinion and applies it to")
-    print("  everything it produces - and making the head wider does not help,")
-    print("  because a wider head still has one row of weights per position.")
+
+    def score_grid(name, rows):
+        print(f"        {name:<9}" + "".join(f"{w:>10}" for w in words))
+        for i in range(T):
+            cells = "".join("      -inf" if v == float("-inf") else f"{v:9.4f} "
+                            for v in rows[i])
+            print(f"      {words[i]:>9} {cells}")
+        print()
+
+    l4_out = l4_weights @ l4_values
+    score_grid("scores", l4_parts["scores"].detach().tolist())
+    score_grid("shares", l4_weights.tolist())
+    wide_grid("answer", l4_out.tolist())
+
+    print(f"  Now put the last two side by side and the problem is a matter of")
+    print("  shape, not arithmetic:")
+    print()
+    print(f"        shares    {T} x {T}    ONE row of weights per position")
+    print(f"        answer    {T} x {D_HEAD}    {D_HEAD} numbers per position")
+    print()
+    print(f"  Position 2 has a single row of shares - {l4_weights[2][0]:.3f}, {l4_weights[2][1]:.3f}, {l4_weights[2][2]:.3f}, {l4_weights[2][3]:.3f} -")
+    print(f"  and that one row produced all {D_HEAD} numbers of its answer row. Every")
+    print("  position is the same: one row of weights, many output numbers.")
+    print()
+    print("  So there is no way for answer number 0 to lean on 'king' while")
+    print(f"  answer number {D_HEAD - 1} leans on 'the'. A head's weights do not depend on")
+    print("  which output number is being produced, so EVERY output number")
+    print("  attends to exactly the same places. One head has one opinion and")
+    print("  applies it to everything it produces - and widening it does not")
+    print(f"  help, because a head {D_HEAD * 2} wide would still have one row of weights")
+    print("  per position.")
     print()
 
     print("=" * 74)
     print("WHAT SEVERAL HEADS DO INSTEAD")
     print("=" * 74)
     print()
-    other = explicit_parts["heads"][1]["weights"][3]
-    print("  Same position, now with two heads:")
+    head_a = explicit_parts["heads"][0]["weights"][2]
+    head_b = explicit_parts["heads"][1]["weights"][2]
+    print("  Same position 2, same three visible words - but split into two")
+    print("  heads, each with its own W_Q, W_K, W_V, so each reaching its own")
+    print("  verdict:")
     print()
-    print(f"        out[0..{d_head - 1}] used  " + "  ".join(f"{row_weights[j]:.3f}" for j in range(T)))
-    print(f"        out[{d_head}..{D_MODEL - 1}] used  " + "  ".join(f"{other[j]:.3f}" for j in range(T)))
+    print(f"        {'':>18}" + "".join(f"{words[j]:>9}" for j in range(3)))
+    print(f"        head 0, out[0..{d_head - 1}]  " + "".join(f"{head_a[j]:9.3f}" for j in range(3)))
+    print(f"        head 1, out[{d_head}..{D_MODEL - 1}]  " + "".join(f"{head_b[j]:9.3f}" for j in range(3)))
     print()
-    print(f"  The first half leans on {words[int(row_weights.argmax())]!r}. The second half leans on")
-    print(f"  {words[int(other.argmax())]!r}. Different parts of the same answer looked at")
-    print("  different words.")
+    print(f"  The first half of the answer leans on {words[int(head_a.argmax())]!r}, the second half on")
+    print(f"  {words[int(head_b.argmax())]!r}. Different parts of the same answer looked at different")
+    print("  words. That is what one head cannot do however wide you make it,")
+    print("  and it is the whole reason for more than one.")
     print()
-    print("  That is what a single head cannot do, however wide you make it, and")
-    print("  it is the whole reason for more than one.")
+    print("  (These are not L4's weights - each head here is freshly initialised")
+    print(f"   and {d_head} wide, not {D_HEAD}. The structure is the point, not the numbers.)")
     print()
     print("  And it costs nothing. Count the weights:")
     print()
@@ -333,6 +391,10 @@ if __name__ == "__main__":
     print("  One head can follow one kind of relationship while another follows")
     print("  something else entirely.")
     print()
+    print("  Every row of both grids is made the way position 2 was made at the")
+    print("  top - L4 steps 1 to 4, run once per head. The heads differ only")
+    print("  because they were handed different W_Q, W_K and W_V.")
+    print()
 
     print("=" * 74)
     print("WHY THERE IS AN OUTPUT PROJECTION")
@@ -340,18 +402,18 @@ if __name__ == "__main__":
     print()
     joined = explicit_parts["joined"]
     print(f"  Concatenating gives {tuple(joined.shape)} - back to d_model. But look at")
-    print("  what that row actually is, for position 3:")
+    print("  what that row actually is, for position 2:")
     print()
-    print(f"        {show(joined[3].tolist())}")
+    print(f"        {show(joined[2].tolist())}")
     print(f"         <------- head 0 -------> <------- head 1 ------->")
     print()
-    print(f"  Numbers 0-{d_head - 1} came ONLY from head 0. Numbers {d_head}-{D_MODEL - 1} ONLY from")
-    print("  head 1. The heads sat next to each other and never spoke.")
+    print(f"  Numbers 0-{d_head - 1} came ONLY from head 0, numbers {d_head}-{D_MODEL - 1} ONLY from head 1.")
+    print("  The heads sat next to each other and never spoke.")
     print()
     print(f"  W_O is a ({D_MODEL} x {D_MODEL}) matrix, so every output number is a blend of")
     print("  every head:")
     print()
-    print(f"        {show(explicit_out[3].tolist())}")
+    print(f"        {show(explicit_out[2].tolist())}")
     print()
     print("  Without it, a later layer would see two separate halves rather than")
     print("  one combined answer.")

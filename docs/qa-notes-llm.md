@@ -1673,6 +1673,47 @@ Also worth asserting: **each output lies within the range of the values it
 averaged.** An average cannot land outside the things being averaged, so a
 violation means the weights are not really weights.
 
+### The answer is not V, and this seed makes them look alike
+
+Both L4 files now print Q, K and V as grids, because for a long time they did
+not. `attention_plain.py` worked one word's query out number by number and then
+jumped to `K = X @ W_K, same shapes` — two thirds of step 1 were never shown in
+the file whose entire purpose is showing every number. `attention.py` printed
+only scores, shares and the answer.
+
+That omission caused a real confusion, worth recording because the numbers
+involved are genuinely misleading. The **answer** is `weights @ V`, not `V`. With
+this seed they look almost the same:
+
+```
+   V                                    answer (weights @ V)
+   the     1.19  -0.70   0.03  ...      the     1.19  -0.70   0.03  ...
+   king    0.41  -0.82  -1.78  ...      king    1.18  -0.70   0.03  ...
+   ruled  -0.30   0.81   2.44  ...      ruled   0.41  -0.76  -1.60  ...
+   the     1.23  -0.55   2.01  ...      the    -0.29   0.79   2.39  ...
+```
+
+Read the answer column downward and each row is a near-copy of the V row *above*
+it. That shifted-by-one pattern is what makes the answer grid read as though it
+were V. The cause is the shares grid:
+
+```
+   the     answer = its OWN V row, exactly    position 0 sees only itself
+   king    answer = the V row of 'the'        99.9% of the weight landed there
+   ruled   answer = the V row of 'king'       94.3%
+   the     answer = the V row of 'ruled'      98.8%
+```
+
+**Only position 0 equals its own V row**, and only because it has nothing else to
+look at. Everywhere else the answer is mostly somebody else's value row.
+
+This is saturation. Weights of `0.999`, `0.943` and `0.988` mean L4's head is
+barely blending anything — it is close to *selecting* one word rather than
+averaging several. `attention_plain.py` analyses why this seed saturates
+(missing `sqrt(d_head)` scaling and over-large initialisation, measured
+separately). It is worth knowing that every downstream file inherits this seed,
+so attention looks more decisive throughout Phase 2 than a trained model's would.
+
 ---
 
 ## Part 5 — The tensor version, and proving it matches
@@ -1763,33 +1804,61 @@ on a GPU, arrive without rewriting anything.
 
 ### What one head cannot do
 
-On our own numbers. Take head 0 and look at how position 3's answer is built:
+The argument starts from L4's own head — one head, `d_head = 8`, the same
+`W_Q/W_K/W_V` that `attention.py` runs — because the limitation has to be shown
+on the thing we already have, not on a head that has already been split.
+
+L4 produces six grids. The last two settle it:
 
 ```
-   weights:  the=0.369  king=0.045  ruled=0.057  the=0.529
-
-   out[0] = 0.369*-0.045 + 0.045* 1.331 + 0.057*-1.054 + 0.529*-1.146 =  -0.622
-   out[1] = 0.369*-0.467 + 0.045*-0.606 + 0.057*-0.008 + 0.529* 0.065 =  -0.166
-   out[2] = 0.369*-1.759 + 0.045* 0.805 + 0.057* 0.002 + 0.529*-0.790 =  -1.031
-   out[3] = 0.369* 0.866 + 0.045* 0.840 + 0.057*-1.592 + 0.529*-0.668 =  -0.085
+   shares                                  answer
+              the    king   ruled    the             c0     c1  ...    c7
+   the     1.0000  0.0000  0.0000  0.0000   the    1.19  -0.70  ...  -0.53
+   king    0.9991  0.0009  0.0000  0.0000   king   1.18  -0.70  ...  -0.53
+   ruled   0.0229  0.9430  0.0340  0.0000   ruled  0.41  -0.76  ...   0.95
+   the     0.0000  0.0117  0.9881  0.0001   the   -0.29   0.79  ...   0.03
 ```
 
-**The same four weights appear in every line.** A head's weights do not depend on
-which output number is being produced, so all of them attend to exactly the same
-places. One head means one opinion, applied to everything it outputs.
-
-Now the two heads together, same position:
-
 ```
-   out[0..3] used  0.369  0.045  0.057  0.529
-   out[4..7] used  0.088  0.405  0.262  0.245
+   shares    4 x 4    ONE row of weights per position
+   answer    4 x 8    8 numbers per position
 ```
 
-The first half leans on `the`; the second half leans on `king`. **Different parts
-of the same answer looked at different words** — and that is precisely what a
-single head cannot do, however wide you make it.
+**The limitation is a matter of shape, not arithmetic.** Position 2 has a single
+row of shares — `0.023, 0.943, 0.034, 0.000` — and that one row produced all
+eight numbers of its answer row. There is no way for answer number 0 to lean on
+`king` while answer number 7 leans on `the`.
 
-`W_O` then mixes those halves so a later layer sees one answer carrying both.
+A head's weights do not depend on which output number is being produced, so every
+output number attends to exactly the same places. One head means one opinion,
+applied to everything it outputs. Widening does not help: a head 16 wide would
+still have one row of weights per position.
+
+An earlier version of this section made the point by printing `out[0..7]` and
+observing the same weights on the left of every line. The shapes prove it rather
+than illustrating it, and both grids are L4's own output.
+
+### What several heads do instead
+
+Same position 2, same three visible words, split into two heads:
+
+```
+                            the     king    ruled
+   head 0, out[0..3]      0.183    0.296    0.521
+   head 1, out[4..7]      0.238    0.423    0.339
+```
+
+The first half of the answer leans on `ruled`, the second half on `king`.
+**Different parts of the same answer looked at different words** — precisely what
+a single head cannot do, however wide you make it.
+
+One caution the script also prints: these are **not** L4's weights. Each head in
+`multihead.py` is freshly initialised by `nn.Linear` and is 4 wide, while L4's
+head loads `build_matrix` weights and is 8 wide. The structure carries over from
+L4; the numbers do not. Comparing `0.183/0.296/0.521` against `0.023/0.943/0.034`
+number-for-number would be meaningless.
+
+`W_O` then mixes the halves so a later layer sees one answer carrying both.
 
 **More heads is not more capacity — it is more than one place to look at once.**
 
@@ -1874,7 +1943,7 @@ column never moves — every split lands back at `d_model`.
 Concatenating alone leaves the heads next to each other, never mixed:
 
 ```
-        [ -0.622,  -0.166,  -1.031,  -0.085,   0.100,  -0.153,  -0.024,   0.301]
+        [ -0.164,  -0.269,  -0.083,  -0.423,   0.011,  -0.003,  -0.106,   0.204]
          <------- head 0 -------> <------- head 1 ------->
 ```
 
