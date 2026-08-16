@@ -189,7 +189,7 @@ Submit the code and terminal output for review before beginning R2. Be prepared 
 - [x] Document shapes at every operation.
 - [x] Implement one causal self-attention head from projections through output.
 - [x] Verify that masked positions receive no attention probability.
-- [ ] Extend the implementation to multiple heads and an output projection.
+- [x] Extend the implementation to multiple heads and an output projection.
 
 ### Validation
 

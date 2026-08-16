@@ -44,7 +44,7 @@ Where they disagree, that order is the order of authority.
 
 ## Current status
 
-**Phase 1 complete (R1–R10). L1–L4 done. Next up: L5 — multi-head attention.**
+**Phase 1 complete (R1–R10). L1–L5 done. Next up: L6 — the transformer block.**
 
 | Milestone | Result |
 | --- | --- |
@@ -81,7 +81,8 @@ comparison).
 position tables, built in plain Python then PyTorch and checked against each
 other), `attention_plain.py` (one causal head as plain loops),
 `attention.py` (the same head in tensors, verified against the loops - this is
-the one later milestones import).
+the one later milestones import), `multihead.py` (several heads plus an output
+projection, explicit and fused versions checked against each other).
 
 ## Environment
 
@@ -111,7 +112,8 @@ RegLLM/
 │   ├── dataset.py         L2  - encode/decode, shifted sequences
 │   ├── embeddings.py      L3
 │   ├── attention_plain.py L4  - the loops, kept as the reference
-│   ├── attention.py       L4, L5
+│   ├── attention.py       L4
+│   ├── multihead.py       L5
 │   ├── transformer.py     L6
 │   ├── model.py           L7
 │   ├── train.py           L8, L9

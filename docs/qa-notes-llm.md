@@ -11,7 +11,7 @@ what is new about language models.
 
 Every number here was produced by running the project's own code.
 
-Covers L1–L4.
+Covers L1–L5.
 
 ---
 
@@ -1757,7 +1757,171 @@ on a GPU, arrive without rewriting anything.
 
 ---
 
-## Part 6 — Scalars before matrices
+## Part 6 — Multi-head attention
+
+*L5, in `multihead.py`.*
+
+### What one head cannot do
+
+A head's weights **sum to 1**. Attention is a zero-sum allocation — one unit to
+hand out per position, total.
+
+Suppose predicting the next word needs both *who acted* (`king`) and *what they
+did* (`ruled`). A single head has to choose:
+
+```
+        0.90 on king and 0.90 on ruled   ->  impossible, that is 1.8
+        0.50 on king and 0.50 on ruled   ->  the best it can manage
+```
+
+So it compromises, and both signals arrive at half strength:
+
+```
+        one head, forced to split:  [0.5, 0.5]   both diluted
+```
+
+Two heads have **two independent units**:
+
+```
+        head 0, 0.9 on king:        [0.9, 0.1]
+        head 1, 0.9 on ruled:       [0.1, 0.9]
+```
+
+Both relationships followed at full strength, side by side, with `W_O` deciding
+how much of each the answer carries.
+
+**That is the reason for more than one head** — not more capacity, but more than
+one place to spend a fixed budget of attention.
+
+### Extra heads are free
+
+```
+        1 head  of 8:  Q/K/V  192 + W_O 64 = 256 weights
+        2 heads of 4:  Q/K/V  192 + W_O 64 = 256 weights
+        4 heads of 2:  Q/K/V  192 + W_O 64 = 256 weights
+        8 heads of 1:  Q/K/V  192 + W_O 64 = 256 weights
+```
+
+Identical, every time. One head of 8 uses three `8x8` matrices; two heads of 4
+use six `8x4` matrices. Same total, same arithmetic. So the question is never
+"are extra heads worth the cost" — it is what to do with a fixed budget.
+
+The catch is that each head gets narrower, and narrow heads are cruder. Using the
+width measurement from Part 4:
+
+```
+        1 head  of 8   1 view,  each head ~3.6 distinct orders of 4
+        2 heads of 4   2 views, each head ~3.5 - nearly as good
+        8 heads of 1   8 views, each head 2.0 - almost useless
+```
+
+Splitting 8 into 2 costs almost nothing per head. Splitting into 8 destroys it —
+back to the "only two orderings" trap. The middle wins, which is why GPT-2 uses
+`12 heads x 64` rather than `1 x 768` or `768 x 1`.
+
+### Why the heads get narrower
+
+A word row is `d_model` numbers, and the layer's answer has to be usable wherever
+the input was — fed onward, or combined with the original row. So it must come
+back out as `d_model`. Since the heads are concatenated, that pins their total.
+
+What happens if each head keeps the full width:
+
+```
+        2 heads x 8 numbers each, stuck side by side
+        -> 16 numbers per word
+        the layer received 8 and handed back 16.
+
+   feed that to another such layer:
+        RuntimeError: mat1 and mat2 shapes cannot be multiplied (4x16 and 8x8)
+```
+
+Narrow each to 4 and the concatenation is 8, which feeds onward fine.
+
+### It is one rule, and L4 was the n_heads=1 case
+
+`attention_plain.py` outputs `(4 x 8)` and each head in `multihead.py` outputs
+`(4 x 4)`. Not a contradiction — the same class with a different setting. **A
+head's output width simply IS its `d_head`:**
+
+```
+   d_head = d_model / n_heads
+
+   n_heads=1  d_head=8  each head gives (4 x 8),  1 of them = (4 x 8)   <- attention_plain.py
+   n_heads=2  d_head=4  each head gives (4 x 4),  2 of them = (4 x 8)   <- multihead.py
+   n_heads=4  d_head=2  each head gives (4 x 2),  4 of them = (4 x 8)
+   n_heads=8  d_head=1  each head gives (4 x 1),  8 of them = (4 x 8)
+```
+
+`multihead.py` imports `CausalSelfAttention` and constructs it with `d_head=4`.
+Nothing about the head changed, only the number passed to it. And the right-hand
+column never moves — every split lands back at `d_model`.
+
+### The whole chain, no batch
+
+```
+        input                 (4 x 8)
+        head 0 output         (4 x 4)     <- narrow, not 8
+        head 1 output         (4 x 4)
+        concatenated          (4 x 8)
+        after W_O             (4 x 8)
+
+   in short:  (4x8) -> 2 x (4x4) -> (4x8) -> (4x8)
+```
+
+### Why there is an output projection
+
+Concatenating alone leaves the heads next to each other, never mixed:
+
+```
+        [ -0.622,  -0.166,  -1.031,  -0.085,   0.100,  -0.153,  -0.024,   0.301]
+         <------- head 0 -------> <------- head 1 ------->
+```
+
+Numbers 0–3 came **only** from head 0, numbers 4–7 **only** from head 1. The
+heads sat side by side and never spoke.
+
+`W_O` is a `(d_model x d_model)` matrix, so every output number becomes a blend
+of every head. Without it a later layer would see two separate halves rather than
+one combined answer.
+
+### Explicit and fused, and the reshape that hides bugs
+
+Both stages are tensors this time, which is a deliberate reading of the
+scalars-before-matrices rule rather than a lapse. Nothing at L5 is new
+arithmetic: running a head several times is a loop, concatenation is sticking
+lists together, and `W_O` is the same operation `attention_plain.py` already
+shows number by number.
+
+What *is* new is a **reshape**, and no amount of Python loops teaches that. So
+"explicit" here means a list of heads:
+
+```
+   stage 1   a list of CausalSelfAttention modules, concatenated, then W_O
+   stage 2   one fused Linear per role, reshaped into heads
+   stage 3   check the two agree
+```
+
+```
+        joined rows   biggest difference 1.19e-07
+        final output  biggest difference 8.94e-08
+        agree: True
+```
+
+The fused version splits the last dimension into `(n_heads, d_head)` and moves
+the head axis in front of `T`. Getting either wrong **does not crash** — it
+quietly mixes the wrong numbers together. `test_split_heads_gives_each_head_its_own_slice`
+uses `arange` rather than random data so the assertion is exact equality: head 0
+must get columns 0–3 and head 1 columns 4–7. With random data a subtly wrong
+reshape can still pass a tolerance check.
+
+`test_one_head_reduces_to_the_l4_head` is the other guard: with `n_heads=1` and
+`W_O` set to the identity, multi-head must reproduce the L4 head exactly. If that
+fails, the plumbing is wrong before any of the interesting part.
+
+---
+
+## Part 7 — Scalars before matrices
 
 The working rule for this phase: **build every component explicitly first, then
 convert it to tensors.** Plain Python numbers and loops, on a hand-sized example,
@@ -1797,7 +1961,7 @@ implementation you read will use. It is just not the starting point.
 
 ---
 
-## Part 7 — Why Phase 1 had no softmax or temperature
+## Part 8 — Why Phase 1 had no softmax or temperature
 
 Neither is missing by oversight — there was nothing for them to act on.
 
