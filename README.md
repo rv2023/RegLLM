@@ -84,6 +84,26 @@ other), `attention_plain.py` (one causal head as plain loops),
 the one later milestones import), `multihead.py` (several heads plus an output
 projection, explicit and fused versions checked against each other).
 
+### Running them
+
+Every `tiny_llm/` module is runnable, and its output is the explanation:
+
+```bash
+.venv/bin/python tiny_llm/attention_plain.py
+```
+
+Each one opens with the problem it solves, works through it with the project's
+real numbers rather than invented ones, and states the conclusion after every
+block. Run them in milestone order and the argument is continuous — later files
+recap earlier grids rather than deriving fresh examples, and say plainly when
+their numbers are *not* the earlier file's.
+
+Worth knowing when reading the attention output: `attention_plain.py` and
+`attention.py` print Q, K and V, then scores, shares, and the answer. **The
+answer is `weights @ V`, not `V`** — and with this seed the weights are close to
+one-hot, so each answer row is nearly a copy of some other word's V row. The
+files say which is which; `docs/qa-notes-llm.md` Part 4 covers why.
+
 ## Environment
 
 R1–R4 use only the Python standard library — nothing to install.
