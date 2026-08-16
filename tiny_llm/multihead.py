@@ -19,6 +19,12 @@ that. So "explicit" here means a LIST of heads rather than a return to loops:
               implementations do
     stage 3   check the two agree
 
+WHY MORE THAN ONE HEAD. A head's weights do not depend on which output number is
+being produced, so every output number attends to exactly the same places. One
+head has one opinion and applies it to everything it produces, and widening it
+does not help - a wider head still has one row of weights per position. Several
+heads let different parts of the same answer look at different words.
+
 WHY d_head SHRINKS. A word row is d_model numbers, and the answer this layer
 hands back has to be usable wherever the input was - fed to another layer, or
 combined with the original row. So it has to come back out as d_model numbers.
@@ -192,7 +198,81 @@ if __name__ == "__main__":
     d_head = D_MODEL // N_HEADS
 
     print("=" * 74)
-    print("WHY THE HEADS GET NARROWER")
+    print("THE PROBLEM - WHAT ONE HEAD CANNOT DO")
+    print("=" * 74)
+    print()
+    print("  L4 built one attention head and it worked: every position ended up")
+    print("  holding a blend of what came before it. So why add more?")
+    print()
+    print("  Look at how one head builds position 3's answer. These are our own")
+    print("  numbers, from head 0:")
+    print()
+    head_zero = explicit_parts["heads"][0]
+    row_weights = head_zero["weights"][3]
+    head_values = head_zero["values"]
+    print(f"        weights:  " + "  ".join(f"{words[j]}={row_weights[j]:.3f}" for j in range(T)))
+    print()
+    for d in range(d_head):
+        terms = " + ".join(
+            f"{row_weights[j]:.3f}*{head_values[j][d]:6.3f}" for j in range(T)
+        )
+        answer = sum(row_weights[j] * head_values[j][d] for j in range(T))
+        print(f"        out[{d}] = {terms} = {answer:7.3f}")
+    print()
+    print("  The same four weights appear in every single line.")
+    print()
+    print("  That is the limitation. A head's weights do not depend on which")
+    print("  output number is being produced, so EVERY output number attends to")
+    print("  exactly the same places. One head has one opinion and applies it to")
+    print("  everything it produces - and making the head wider does not help,")
+    print("  because a wider head still has one row of weights per position.")
+    print()
+
+    print("=" * 74)
+    print("WHAT SEVERAL HEADS DO INSTEAD")
+    print("=" * 74)
+    print()
+    other = explicit_parts["heads"][1]["weights"][3]
+    print("  Same position, now with two heads:")
+    print()
+    print(f"        out[0..{d_head - 1}] used  " + "  ".join(f"{row_weights[j]:.3f}" for j in range(T)))
+    print(f"        out[{d_head}..{D_MODEL - 1}] used  " + "  ".join(f"{other[j]:.3f}" for j in range(T)))
+    print()
+    print(f"  The first half leans on {words[int(row_weights.argmax())]!r}. The second half leans on")
+    print(f"  {words[int(other.argmax())]!r}. Different parts of the same answer looked at")
+    print("  different words.")
+    print()
+    print("  That is what a single head cannot do, however wide you make it, and")
+    print("  it is the whole reason for more than one.")
+    print()
+    print("  And it costs nothing. Count the weights:")
+    print()
+    for n in (1, 2, 4, 8):
+        sample = MultiHeadExplicit(n_heads=n)
+        qkv = sum(p.numel() for h in sample.heads for p in h.parameters())
+        projection = sample.to_output.weight.numel()
+        marker = "   <- ours" if n == N_HEADS else ""
+        print(f"        {n} head(s) of {D_MODEL // n}:  Q/K/V {qkv:4} + W_O {projection} = "
+              f"{qkv + projection} weights{marker}")
+    print()
+    print(f"  Identical every time. One head of {D_MODEL} uses three {D_MODEL}x{D_MODEL} matrices;")
+    print(f"  {N_HEADS} heads of {d_head} use six {D_MODEL}x{d_head} matrices. Same total, same")
+    print("  arithmetic. So the question is never whether extra heads are worth")
+    print("  the cost - it is what to do with a fixed budget.")
+    print()
+    print("  The catch is that each head gets narrower, and narrow heads are")
+    print("  cruder. From the width measurement in attention_plain.py:")
+    print()
+    print(f"        1 head  of {D_MODEL}   1 view,  each head ~3.6 distinct orders of {T}")
+    print(f"        {N_HEADS} heads of {d_head}   {N_HEADS} views, each head ~3.5 - nearly as good")
+    print(f"        {D_MODEL} heads of 1   {D_MODEL} views, each head 2.0 - almost useless")
+    print()
+    print("  Somewhere in the middle wins, which is why GPT-2 uses 12 heads of")
+    print("  64 rather than 1 of 768 or 768 of 1.")
+    print()
+
+    print("=" * 74)
+    print("SO THE HEADS HAVE TO GET NARROWER")
     print("=" * 74)
     print()
     print(f"  A word row is {D_MODEL} numbers. That is what this layer receives, and")
@@ -221,14 +301,10 @@ if __name__ == "__main__":
     print(f"        {N_HEADS} heads x {d_head} numbers each, stuck side by side")
     print(f"        -> {N_HEADS * d_head} numbers per word, which is what came in")
     print()
-    print("  Feed THAT to another layer and it works. That is the whole reason")
-    print("  the heads get narrower:")
+    print("  Feed THAT to another layer and it works:")
     print()
     print(f"        n_heads x d_head = d_model")
     print(f"        {N_HEADS} x {d_head} = {N_HEADS * d_head}")
-    print()
-    print("  With one head there was nothing to share the width with, so it")
-    print(f"  kept all {D_MODEL}. With {N_HEADS} they split it.")
     print()
     print("  These are not two different kinds of head. It is the same class")
     print("  from L4 with a narrower setting - a head's output width simply IS")
@@ -240,78 +316,8 @@ if __name__ == "__main__":
         print(f"        n_heads={n}  d_head={width}  each head gives ({T} x {width}),"
               f"  {n} of them = ({T} x {n * width}){marker}")
     print()
-    print(f"  attention_plain.py sets D_HEAD = D_MODEL because it is the")
-    print("  n_heads=1 case. Whatever the split, the concatenation lands back")
-    print(f"  at {D_MODEL}.")
-    print()
-
-    print("=" * 74)
-    print("WHY BOTHER WITH MORE THAN ONE HEAD?")
-    print("=" * 74)
-    print()
-    print("  Because they are free. Count the weights:")
-    print()
-    for n in (1, 2, 4, 8):
-        sample = MultiHeadExplicit(n_heads=n)
-        qkv = sum(p.numel() for head in sample.heads for p in head.parameters())
-        projection = sample.to_output.weight.numel()
-        marker = "   <- ours" if n == N_HEADS else ""
-        print(f"        {n} head(s) of {D_MODEL // n}:  Q/K/V {qkv:4} + W_O {projection} = "
-              f"{qkv + projection} weights{marker}")
-    print()
-    print(f"  Identical, every time. One head of {D_MODEL} uses three {D_MODEL}x{D_MODEL} matrices;")
-    print(f"  {N_HEADS} heads of {d_head} use six {D_MODEL}x{d_head} matrices. Same total, same amount")
-    print("  of arithmetic.")
-    print()
-    print("  So the question is not whether extra heads are worth the cost -")
-    print("  there is none. It is: given the same budget, do you want ONE")
-    print("  attention pattern or several?")
-    print()
-    print("  What one head CANNOT do, on our own numbers. Take head 0 and look")
-    print("  at how position 3's answer is built:")
-    print()
-    head_zero = explicit_parts["heads"][0]
-    row_weights = head_zero["weights"][3]
-    head_values = head_zero["values"]
-    print(f"        weights:  " + "  ".join(f"{words[j]}={row_weights[j]:.3f}" for j in range(T)))
-    print()
-    for d in range(d_head):
-        terms = " + ".join(
-            f"{row_weights[j]:.3f}*{head_values[j][d]:6.3f}" for j in range(T)
-        )
-        answer = sum(row_weights[j] * head_values[j][d] for j in range(T))
-        print(f"        out[{d}] = {terms} = {answer:7.3f}")
-    print()
-    print("  The same four weights appear in every line. A head's weights do")
-    print("  not depend on which output number is being produced, so ALL of")
-    print("  them attend to exactly the same places. One head means one")
-    print("  opinion, applied to everything it outputs.")
-    print()
-    print("  Now the two heads together, same position:")
-    print()
-    other = explicit_parts["heads"][1]["weights"][3]
-    print(f"        out[0..{d_head - 1}] used  " + "  ".join(f"{row_weights[j]:.3f}" for j in range(T)))
-    print(f"        out[{d_head}..{D_MODEL - 1}] used  " + "  ".join(f"{other[j]:.3f}" for j in range(T)))
-    print()
-    print(f"  The first half leans on {words[int(row_weights.argmax())]!r}; the second half leans on")
-    print(f"  {words[int(other.argmax())]!r}. Different parts of the same answer looked at")
-    print("  different words - and that is precisely what a single head cannot")
-    print("  do, however wide you make it.")
-    print()
-    print("  W_O then mixes those halves, so a later layer sees one answer that")
-    print("  carries both. More heads is not more capacity - it is more than")
-    print("  one place to look at once.")
-    print()
-    print("  The catch is that each head gets narrower, and narrow heads are")
-    print("  cruder. From the width measurement in attention_plain.py, out of")
-    print(f"  {T} positions:")
-    print()
-    print(f"        1 head  of {D_MODEL}   1 view,  each head ~3.6 distinct orders of {T}")
-    print(f"        {N_HEADS} heads of {d_head}   {N_HEADS} views, each head ~3.5 - nearly as good")
-    print(f"        {D_MODEL} heads of 1   {D_MODEL} views, each head 2.0 - almost useless")
-    print()
-    print("  Somewhere in the middle wins, which is why GPT-2 uses 12 heads of")
-    print("  64 rather than 1 of 768 or 768 of 1.")
+    print(f"  attention_plain.py is the n_heads=1 case: with nothing to share the")
+    print(f"  width with, its head kept all {D_MODEL}.")
     print()
 
     print("=" * 74)
